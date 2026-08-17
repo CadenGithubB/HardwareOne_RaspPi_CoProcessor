@@ -1,0 +1,22 @@
+# id	repository	revision	filename	bytes	sha256
+# Overclock A/B manifest: the shipping candidate only, so each rung of the
+# ladder costs ~12 minutes instead of ~30.
+#
+#   ./tools/benchmark_llm_serve.sh --serve-only --strict-power --manifest tools/llm_serve_oc.tsv
+#
+# Every run measures the active baseline first and last to expose within-run
+# drift. To quantify an overclock, compare each model's absolute metrics against
+# that same model at stock; a candidate/baseline ratio can cancel a shared clock
+# gain and is not an overclock measurement.
+#
+# The SDRAM clock is not configurable on Pi 5 / CM5, so decode may be more
+# bandwidth-bound than prefill. There is no valid local stock-versus-OC result
+# yet. docs/CM5_PI5_PERFORMANCE_RECORD.md section 2 is under-volted versus clean
+# power, not clock-only evidence. Watch both TTFT and decode and let the A/B
+# establish the split.
+#
+# MEASURED 2026-08-13 at stock 2400 MHz, for comparison:
+#   active-baseline (Qwen3-1.7B Q4_0)  TTFT 0.21 / 0.77   9.67 t/s   2337 MiB
+#   lfm2 UD-Q3_K_XL                    TTFT 3.18 / 1.00  14.68 t/s   3807 MiB
+
+lfm2-8b-a1b-ud-q3-k-xl	unsloth/LFM2-8B-A1B-GGUF	01c1c9ba807324289806d69f5895e11aff6de784	LFM2-8B-A1B-UD-Q3_K_XL.gguf	3676339264	d10253b60d9699c4936a024fded42cba4581dc3640182146cba95fe57c143ac6

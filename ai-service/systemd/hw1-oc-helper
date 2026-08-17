@@ -1,0 +1,609 @@
+#!/usr/bin/python3 -I
+"""Root-owned, finite tryboot helper for CM5 overclock campaigns.
+
+Install this file root:root mode 0755 at
+``/usr/local/libexec/hw1-oc-helper``. The unprivileged campaign runner may only
+select one of the frequencies and voltage deltas enumerated below. It cannot
+choose a path, write arbitrary config text, or execute an arbitrary command.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+ALLOWED_MHZ = (2400, 2500, 2600, 2700, 2800, 2900, 3000)
+ALLOWED_DELTA_UV = (0, 10000, 20000, 30000, 40000, 50000)
+CONFIG_PATH = Path("/boot/firmware/config.txt")
+TRYBOOT_PATH = Path("/boot/firmware/tryboot.txt")
+STATE_DIR = Path("/var/lib/hw1-oc")
+STATE_PATH = STATE_DIR / "state.json"
+LOCK_PATH = STATE_DIR / "lock"
+BLOCK_BEGIN = "# >>> hw1-oc (managed by tools/oc_step.sh) >>>"
+BLOCK_END = "# <<< hw1-oc <<<"
+REBOOT_PATHS = (Path("/usr/sbin/reboot"), Path("/sbin/reboot"))
+
+# Any active copy outside our managed block makes the effective setting
+# conditional/order-dependent. Refuse to guess rather than overwriting it.
+CONFLICT_KEYS = frozenset(
+    {
+        "arm_freq",
+        "arm_freq_min",
+        "core_freq",
+        "force_turbo",
+        "gpu_freq",
+        "hevc_freq",
+        "isp_freq",
+        "over_voltage",
+        "over_voltage_delta",
+        "sdram_freq",
+        "v3d_freq",
+    }
+)
+ASSIGNMENT_RE = re.compile(r"^\s*([A-Za-z0-9_]+)\s*=", re.ASCII)
+
+
+class HelperError(RuntimeError):
+    """Expected, user-actionable helper failure."""
+
+
+def _result(ok: bool, code: str, **extra: object) -> dict[str, object]:
+    return {"ok": ok, "code": code, **extra}
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _regular_file(path: Path) -> os.stat_result:
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise HelperError(f"cannot stat {path}: {exc}") from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise HelperError(f"refusing non-regular file: {path}")
+    return info
+
+
+def _ensure_state_dir() -> None:
+    try:
+        STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = STATE_DIR.lstat()
+    except OSError as exc:
+        raise HelperError(f"cannot prepare {STATE_DIR}: {exc}") from exc
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise HelperError(f"refusing unsafe state directory: {STATE_DIR}")
+    if info.st_uid != 0:
+        raise HelperError(f"state directory is not root-owned: {STATE_DIR}")
+    os.chmod(STATE_DIR, 0o700)
+
+
+def _read_config() -> tuple[bytes, os.stat_result]:
+    info = _regular_file(CONFIG_PATH)
+    try:
+        data = CONFIG_PATH.read_bytes()
+    except OSError as exc:
+        raise HelperError(f"cannot read {CONFIG_PATH}: {exc}") from exc
+    return data, info
+
+
+def _load_state() -> dict[str, object] | None:
+    if not STATE_PATH.exists():
+        return None
+    _regular_file(STATE_PATH)
+    try:
+        value = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HelperError(f"cannot read helper state: {exc}") from exc
+    if not isinstance(value, dict):
+        raise HelperError("helper state is not an object")
+    return value
+
+
+def _atomic_write(path: Path, data: bytes, *, mode: int, uid: int, gid: int) -> None:
+    suffix = f".{os.getpid()}.{time.time_ns()}"
+    temporary = path.with_name(f".{path.name}{suffix}")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = -1
+    try:
+        fd = os.open(temporary, flags, 0o600)
+        os.fchmod(fd, stat.S_IMODE(mode))
+        os.fchown(fd, uid, gid)
+        with os.fdopen(fd, "wb", closefd=True) as stream:
+            fd = -1
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        raise HelperError(f"cannot atomically write {path}: {exc}") from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _save_state(value: dict[str, object]) -> None:
+    encoded = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
+    _atomic_write(STATE_PATH, encoded, mode=0o600, uid=0, gid=0)
+
+
+def _strip_managed_block(
+    text: str,
+) -> tuple[str, list[tuple[int, str]], int]:
+    output: list[str] = []
+    conflicts: list[tuple[int, str]] = []
+    inside = False
+    blocks = 0
+    for line_number, line in enumerate(text.splitlines(keepends=True), 1):
+        stripped = line.rstrip("\r\n")
+        if stripped == BLOCK_BEGIN:
+            if inside:
+                raise HelperError("nested managed overclock block")
+            inside = True
+            blocks += 1
+            continue
+        if stripped == BLOCK_END:
+            if not inside:
+                raise HelperError("managed overclock block has an unmatched end marker")
+            inside = False
+            continue
+        if inside:
+            continue
+        output.append(line)
+        candidate = line.split("#", 1)[0].strip()
+        match = ASSIGNMENT_RE.match(candidate)
+        if match and match.group(1).lower() in CONFLICT_KEYS:
+            conflicts.append((line_number, candidate))
+    if inside:
+        raise HelperError("managed overclock block has no end marker")
+    if blocks > 1:
+        raise HelperError("multiple managed overclock blocks found")
+    base = "".join(output)
+    if base and not base.endswith("\n"):
+        base += "\n"
+    return base, conflicts, blocks
+
+
+def _managed_config(base: str, mhz: int, delta_uv: int) -> bytes:
+    lines = [
+        base.rstrip("\n"),
+        BLOCK_BEGIN,
+        "[cm5]",
+        f"arm_freq={mhz}",
+    ]
+    if delta_uv:
+        lines.append(f"over_voltage_delta={delta_uv}")
+    lines.extend(("[all]", BLOCK_END, ""))
+    return "\n".join(lines).lstrip("\n").encode()
+
+
+def _backup_current(data: bytes, info: os.stat_result, label: str) -> str:
+    name = f"config-{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns()}-{label}.txt"
+    path = STATE_DIR / name
+    _atomic_write(
+        path,
+        data,
+        mode=stat.S_IMODE(info.st_mode),
+        uid=0,
+        gid=0,
+    )
+    return name
+
+
+def _strip_expected_legacy_overclock(
+    text: str,
+    conflicts: list[tuple[int, str]],
+    expected_mhz: int,
+    expected_delta_uv: int,
+) -> str:
+    """Remove only the explicitly named legacy OC assignments.
+
+    This is deliberately narrower than a generic config rewriter.  It exists
+    only to adopt a board that entered the campaign with the old one-line
+    ``arm_freq=...`` method, after the operator states the exact active values.
+    """
+
+    assignment = re.compile(
+        r"^\s*(arm_freq|over_voltage_delta)\s*=\s*([0-9]+)\s*$", re.ASCII
+    )
+    seen_arm = 0
+    seen_delta = 0
+    remove_lines: set[int] = set()
+    for line_number, candidate in conflicts:
+        match = assignment.fullmatch(candidate)
+        if match is None:
+            raise HelperError(
+                "legacy normalization found an unrelated overclock setting: "
+                f"line {line_number}: {candidate}"
+            )
+        key, raw_value = match.groups()
+        value = int(raw_value, 10)
+        if key == "arm_freq":
+            seen_arm += 1
+            if value != expected_mhz:
+                raise HelperError(
+                    f"line {line_number} has arm_freq={value}, not the "
+                    f"operator-confirmed {expected_mhz}"
+                )
+        else:
+            seen_delta += 1
+            if value != expected_delta_uv:
+                raise HelperError(
+                    f"line {line_number} has over_voltage_delta={value}, not "
+                    f"the operator-confirmed {expected_delta_uv}"
+                )
+        remove_lines.add(line_number)
+    if seen_arm != 1:
+        raise HelperError(
+            f"legacy normalization requires exactly one arm_freq assignment; "
+            f"found {seen_arm}"
+        )
+    if seen_delta > 1:
+        raise HelperError("multiple over_voltage_delta assignments found")
+    if expected_delta_uv != 0 and seen_delta != 1:
+        raise HelperError(
+            "operator confirmed a nonzero voltage delta, but no matching "
+            "over_voltage_delta assignment exists"
+        )
+
+    output = [
+        line
+        for line_number, line in enumerate(text.splitlines(keepends=True), 1)
+        if line_number not in remove_lines
+    ]
+    base = "".join(output)
+    if base and not base.endswith("\n"):
+        base += "\n"
+    return base
+
+
+def _normalize_stock(
+    expected_mhz: int | None, expected_delta_uv: int | None
+) -> dict[str, object]:
+    current, info = _read_config()
+    state = _load_state()
+    current_hash = _sha256(current)
+    try:
+        decoded = current.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HelperError(f"config.txt is not UTF-8: {exc}") from exc
+    base, conflicts, blocks = _strip_managed_block(decoded)
+    legacy = False
+    if conflicts:
+        if blocks:
+            raise HelperError(
+                "both managed and unmanaged overclock settings exist; refusing "
+                "to guess which is active"
+            )
+        if expected_mhz is None or expected_delta_uv is None:
+            detail = "; ".join(
+                f"line {line}: {value}" for line, value in conflicts
+            )
+            raise HelperError(
+                "unmanaged overclock setting found; repeat normalize-stock "
+                f"with its exact MHz and voltage delta: {detail}"
+            )
+        if state is not None:
+            raise HelperError(
+                "campaign state already exists; refusing to reinterpret an "
+                "unmanaged config as stock"
+            )
+        base = _strip_expected_legacy_overclock(
+            decoded, conflicts, expected_mhz, expected_delta_uv
+        )
+        legacy = True
+    elif expected_mhz is not None:
+        raise HelperError(
+            "an expected legacy frequency was supplied, but no unmanaged "
+            "overclock assignment exists"
+        )
+
+    if blocks == 0 and not legacy:
+        if state is not None and current_hash != state.get("stock_sha256"):
+            raise HelperError(
+                "config.txt changed after the campaign began; refusing to adopt "
+                "a new stock configuration"
+            )
+        if state is None:
+            _save_state(
+                {"schema": 1, "stock_sha256": current_hash, "history": []}
+            )
+        return _result(True, "already_stock", stock_sha256=current_hash)
+
+    normalized = base.encode()
+    normalized_hash = _sha256(normalized)
+    if state is not None:
+        raise HelperError(
+            "campaign state already exists; refusing to reinterpret a changed "
+            "normal config as stock"
+        )
+    backup = _backup_current(current, info, "before-normalize")
+    _atomic_write(
+        CONFIG_PATH,
+        normalized,
+        mode=stat.S_IMODE(info.st_mode),
+        uid=info.st_uid,
+        gid=info.st_gid,
+    )
+    history = [] if state is None else state.setdefault("history", [])
+    if not isinstance(history, list):
+        raise HelperError("helper history is invalid")
+    history.append(
+        {
+            "when": int(time.time()),
+            "action": "normalize-stock",
+            "before_sha256": current_hash,
+            "stock_sha256": normalized_hash,
+            "backup": backup,
+            "source": "legacy-unmanaged" if legacy else "managed-block",
+        }
+    )
+    state = {
+        "schema": 1,
+        "stock_sha256": normalized_hash,
+        "history": history,
+        "normalized_from_sha256": current_hash,
+        "normalization_backup": backup,
+    }
+    _save_state(state)
+    os.sync()
+    return _result(
+        True,
+        "normalized_stock",
+        stock_sha256=normalized_hash,
+        removed_managed_blocks=blocks,
+        removed_legacy_overclock=legacy,
+        backup=backup,
+    )
+
+
+def _stage(mhz: int, delta_uv: int) -> dict[str, object]:
+    current, info = _read_config()
+    state = _load_state()
+    current_hash = _sha256(current)
+    if state is not None and current_hash != state.get("stock_sha256"):
+        raise HelperError(
+            "normal config.txt changed after the campaign began; refusing to "
+            "stage a trial from an unknown stock configuration"
+        )
+    try:
+        decoded = current.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HelperError(f"config.txt is not UTF-8: {exc}") from exc
+    base, conflicts, blocks = _strip_managed_block(decoded)
+    if conflicts:
+        detail = "; ".join(f"line {line}: {value}" for line, value in conflicts)
+        raise HelperError(f"overclock setting outside managed block: {detail}")
+    if blocks:
+        raise HelperError(
+            "normal config.txt still contains a managed overclock block; run "
+            "normalize-stock and reboot normally before staging tryboot"
+        )
+
+    if state is None:
+        state = {"schema": 1, "stock_sha256": current_hash, "history": []}
+
+    if TRYBOOT_PATH.exists():
+        _regular_file(TRYBOOT_PATH)
+        existing_hash = _sha256(TRYBOOT_PATH.read_bytes())
+        expected_hash = state.get("tryboot_sha256")
+        if expected_hash is None or existing_hash != expected_hash:
+            raise HelperError(
+                "unrecognized tryboot.txt exists; refusing to overwrite it"
+            )
+
+    updated = _managed_config(base, mhz, delta_uv)
+    _atomic_write(
+        TRYBOOT_PATH,
+        updated,
+        mode=stat.S_IMODE(info.st_mode),
+        uid=info.st_uid,
+        gid=info.st_gid,
+    )
+    history = state.setdefault("history", [])
+    if not isinstance(history, list):
+        raise HelperError("helper history is invalid")
+    history.append(
+        {
+            "when": int(time.time()),
+            "mhz": mhz,
+            "delta_uv": delta_uv,
+            "stock_sha256": current_hash,
+            "tryboot_sha256": _sha256(updated),
+        }
+    )
+    state.update(
+        {
+            "stock_sha256": current_hash,
+            "staged_mhz": mhz,
+            "staged_delta_uv": delta_uv,
+            "tryboot_sha256": _sha256(updated),
+        }
+    )
+    _save_state(state)
+    os.sync()
+    return _result(
+        True,
+        "staged",
+        staged_mhz=mhz,
+        delta_uv=delta_uv,
+        stock_sha256=current_hash,
+        tryboot_sha256=_sha256(updated),
+    )
+
+
+def _clear_staged() -> dict[str, object]:
+    current, _ = _read_config()
+    state = _load_state()
+    if state is None:
+        raise HelperError("no campaign state exists")
+    if _sha256(current) != state.get("stock_sha256"):
+        raise HelperError("normal config.txt no longer matches recorded stock")
+    if not TRYBOOT_PATH.exists():
+        return _result(True, "already_clear", stock_sha256=_sha256(current))
+    _regular_file(TRYBOOT_PATH)
+    existing_hash = _sha256(TRYBOOT_PATH.read_bytes())
+    if existing_hash != state.get("tryboot_sha256"):
+        raise HelperError("tryboot.txt does not match the file staged by this helper")
+    try:
+        TRYBOOT_PATH.unlink()
+        directory_fd = os.open(TRYBOOT_PATH.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        raise HelperError(f"cannot remove {TRYBOOT_PATH}: {exc}") from exc
+    state["tryboot_sha256"] = None
+    state["staged_mhz"] = None
+    state["staged_delta_uv"] = None
+    _save_state(state)
+    os.sync()
+    return _result(True, "cleared", stock_sha256=_sha256(current))
+
+
+def _validate_staged() -> None:
+    current, _ = _read_config()
+    state = _load_state()
+    if state is None or state.get("staged_mhz") is None:
+        raise HelperError("no overclock trial is staged")
+    if _sha256(current) != state.get("stock_sha256"):
+        raise HelperError("normal config.txt no longer matches recorded stock")
+    if not TRYBOOT_PATH.exists():
+        raise HelperError("tryboot.txt is missing")
+    _regular_file(TRYBOOT_PATH)
+    if _sha256(TRYBOOT_PATH.read_bytes()) != state.get("tryboot_sha256"):
+        raise HelperError("tryboot.txt hash does not match staged state")
+
+
+def _validate_normal_stock() -> None:
+    current, _ = _read_config()
+    state = _load_state()
+    if state is None:
+        raise HelperError("no campaign stock state exists")
+    if _sha256(current) != state.get("stock_sha256"):
+        raise HelperError("normal config.txt no longer matches recorded stock")
+
+
+def _status() -> dict[str, object]:
+    current, _ = _read_config()
+    state = _load_state()
+    tryboot_hash: str | None = None
+    if TRYBOOT_PATH.exists():
+        _regular_file(TRYBOOT_PATH)
+        tryboot_hash = _sha256(TRYBOOT_PATH.read_bytes())
+    return _result(
+        True,
+        "ok",
+        stock_sha256=_sha256(current),
+        tryboot_sha256=tryboot_hash,
+        state=state,
+        externally_modified=(
+            state is not None and _sha256(current) != state.get("stock_sha256")
+        ),
+    )
+
+
+def _fixed_reboot() -> str:
+    for path in REBOOT_PATHS:
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    raise HelperError("reboot executable not found")
+
+
+def _request_reboot(tryboot: bool) -> None:
+    command = [_fixed_reboot()]
+    if tryboot:
+        # This is Raspberry Pi's documented one-shot tryboot reboot argument.
+        # Firmware consumes and clears the flag before loading tryboot.txt.
+        command.append("0 tryboot")
+    completed = subprocess.run(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise HelperError(f"reboot failed with rc={completed.returncode}")
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    subparsers = parser.add_subparsers(dest="action", required=True)
+    apply_parser = subparsers.add_parser("stage")
+    apply_parser.add_argument("mhz", type=int, choices=ALLOWED_MHZ)
+    apply_parser.add_argument("delta_uv", type=int, choices=ALLOWED_DELTA_UV)
+    normalize_parser = subparsers.add_parser("normalize-stock")
+    normalize_parser.add_argument("mhz", nargs="?", type=int, choices=ALLOWED_MHZ)
+    normalize_parser.add_argument(
+        "delta_uv", nargs="?", type=int, choices=ALLOWED_DELTA_UV
+    )
+    subparsers.add_parser("clear-staged")
+    subparsers.add_parser("reboot-try")
+    subparsers.add_parser("reboot-normal")
+    subparsers.add_parser("status")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = _parser().parse_args(argv)
+    try:
+        _ensure_state_dir()
+        lock_fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if arguments.action == "stage":
+                value = _stage(arguments.mhz, arguments.delta_uv)
+            elif arguments.action == "normalize-stock":
+                if arguments.mhz is None and arguments.delta_uv is not None:
+                    raise HelperError("a voltage delta requires an expected MHz")
+                value = _normalize_stock(
+                    arguments.mhz,
+                    0 if arguments.mhz is not None and arguments.delta_uv is None
+                    else arguments.delta_uv,
+                )
+            elif arguments.action == "clear-staged":
+                value = _clear_staged()
+            else:
+                if arguments.action == "reboot-try":
+                    _validate_staged()
+                elif arguments.action == "reboot-normal":
+                    _validate_normal_stock()
+                value = _status()
+            print(json.dumps(value, sort_keys=True), flush=True)
+            if arguments.action == "reboot-try":
+                _request_reboot(True)
+            elif arguments.action == "reboot-normal":
+                _request_reboot(False)
+        finally:
+            os.close(lock_fd)
+    except HelperError as exc:
+        print(json.dumps(_result(False, "rejected", error=str(exc))), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

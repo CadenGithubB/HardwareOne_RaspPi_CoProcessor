@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "name": "hardwareone-gate0a-medium-mixed-slice-v3",
+  "full_gate": false,
+  "corpus_directory": "~/stt-corpus",
+  "limitations": [
+    "three_positive_cases_only",
+    "negative_controls_static_noise_only",
+    "insufficient_for_model_selection"
+  ],
+  "model": {
+    "directory": "~/.cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized_26_07_30",
+    "requested_arch": "medium-streaming",
+    "enum_name": "MEDIUM_STREAMING"
+  },
+  "runtime": {
+    "moonshine_distribution_version": "0.1.1"
+  },
+  "policy": {
+    "allowed_update_intervals_seconds": [0.5, 1.0],
+    "audio_queue_chunks": 8,
+    "text_queue_events": 64,
+    "max_stream_start_seconds": 2.0,
+    "max_stream_wall_over_audio_seconds": 2.0,
+    "max_end_to_final_seconds": 0.8,
+    "max_queue_age_ms": 1024.0,
+    "max_temperature_c": 80.0,
+    "max_aggregate_wer": 0.2,
+    "max_partial_gap_seconds": 1.35,
+    "min_partial_updates_per_second": 1.0,
+    "partial_post_end_tolerance_seconds": 0.35
+  },
+  "cases": {
+    "001": {
+      "kind": "positive",
+      "wav_sha256": "bb06964e12a729f39fea751749adc66be4124321702d0d8cc7840e03d3dd3f4c",
+      "reference_sha256": "45957ef6b667c9cef61cefb935153f2ff98d408b9b19ebfc7153bf251f2b1534",
+      "frames": 24576,
+      "chunks": 12,
+      "max_word_errors": 1
+    },
+    "002": {
+      "kind": "positive",
+      "wav_sha256": "ed7881dc73a73ab42ddb522d69e8984299c12b132394a393d0b18ca99403487c",
+      "reference_sha256": "3e9df0357079c9783e0572c0a26f6fd323db4e8357f07d28e9613506419812fa",
+      "frames": 40960,
+      "chunks": 20,
+      "max_word_errors": 1
+    },
+    "005": {
+      "kind": "positive",
+      "wav_sha256": "7d60e37503386d8469556d7a4563ea5fdae7e5daa43d6df15f5eab6263b47357",
+      "reference_sha256": "ef00660fe36b85fd0e7d2c19e7e350d47fd7b027c756482c5cfeaa27cda7d8a7",
+      "frames": 67584,
+      "chunks": 33,
+      "max_word_errors": 2
+    },
+    "neg001": {
+      "kind": "negative",
+      "wav_sha256": "02d0a7cf83b1a55c9e9eb5cf7a797f8238b03866a5565f70eaa3c337a3fb51c2",
+      "reference_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "frames": 90112,
+      "chunks": 44
+    },
+    "neg002": {
+      "kind": "negative",
+      "wav_sha256": "cae8a1c4a73f5f07c01830d05d527c3d37b339cafd9fde9463c48ee292d75861",
+      "reference_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "frames": 118784,
+      "chunks": 58
+    },
+    "neg003": {
+      "kind": "negative",
+      "wav_sha256": "8656cecacdefa70cdf40cf2bae67734e4d96a340d22d978103ba00f367d177a1",
+      "reference_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "frames": 194560,
+      "chunks": 95
+    },
+    "neg004": {
+      "kind": "negative",
+      "wav_sha256": "5ab049eebedec1d8755884c5536ca918413e12f391a0cac6f616dd7dc2fce426",
+      "reference_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "frames": 204800,
+      "chunks": 100
+    }
+  }
+}

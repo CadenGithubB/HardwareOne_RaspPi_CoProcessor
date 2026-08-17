@@ -1,0 +1,43 @@
+[Unit]
+Description=HardwareOne CM5 persistent PWM fan controller
+After=local-fs.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=root
+Group=hw1-fan
+RuntimeDirectory=hw1-fan-controller
+RuntimeDirectoryMode=0750
+
+# These best-effort guards run outside the daemon lifecycle. ExecStopPost also
+# runs after a watchdog SIGKILL and restores the kernel governor when the
+# unique pwm-fan topology remains discoverable.
+ExecStartPre=-/usr/local/libexec/hw1-fan-controller --restore-kernel
+ExecStart=/usr/local/libexec/hw1-fan-controller --config /etc/hw1-fan-controller.json
+ExecStopPost=-/usr/local/libexec/hw1-fan-controller --restore-kernel
+
+Restart=always
+RestartSec=2s
+WatchdogSec=10s
+WatchdogSignal=SIGKILL
+TimeoutStopSec=5s
+KillMode=control-group
+UMask=0007
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+# Do not enable ProtectKernelTunables: this service deliberately writes the
+# discovered pwm-fan and thermal-policy sysfs attributes.
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

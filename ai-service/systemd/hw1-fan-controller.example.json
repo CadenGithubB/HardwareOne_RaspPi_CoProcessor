@@ -1,0 +1,18 @@
+{
+  "socket_path": "/run/hw1-fan-controller/control.sock",
+  "poll_interval_s": 1.0,
+  "rediscover_interval_s": 5.0,
+  "quiet_pwm": 75,
+  "start_boost_pwm": 255,
+  "start_boost_s": 0.75,
+  "stall_timeout_s": 4.0,
+  "safety_temp_mc": 80000,
+  "safety_hysteresis_mc": 5000,
+  "curve_hysteresis_mc": 5000,
+  "curve": [
+    {"temp_mc": 50000, "pwm": 75},
+    {"temp_mc": 60000, "pwm": 125},
+    {"temp_mc": 67500, "pwm": 175},
+    {"temp_mc": 75000, "pwm": 250}
+  ]
+}

@@ -1,0 +1,309 @@
+#!/usr/bin/python3 -I
+"""Root-owned, finite HardwareOne power helper for Raspberry Pi 5 / CM5.
+
+Install this file root:root mode 0755 at
+``/usr/local/libexec/hw1-power-helper``.  It is intentionally self-contained:
+running privileged code from the service's user-writable virtualenv would turn
+an ordinary package update into root code execution.
+
+Accepted argv is defined by argparse choices below.  All subprocess commands
+and sysfs paths are fixed; no shell or caller-provided command string exists.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+MIN_SLEEP_MINUTES = 1
+MAX_SLEEP_MINUTES = 1440
+_CPUFREQ_ROOT = Path("/sys/devices/system/cpu/cpufreq")
+_POWER_STATE = Path("/sys/power/state")
+_RTC_WAKEALARM = Path("/sys/class/rtc/rtc0/wakealarm")
+_SYSTEMCTL_PATHS = (Path("/usr/bin/systemctl"), Path("/bin/systemctl"))
+
+_GOVERNOR_CANDIDATES = {
+    "eco": ("powersave",),
+    "balanced": ("schedutil", "ondemand", "conservative"),
+    "performance": ("performance",),
+    # Direct helper use treats auto as its safe baseline.  The unprivileged
+    # controller normally implements auto by alternating concrete profiles.
+    "auto": ("schedutil", "ondemand", "conservative"),
+}
+
+
+def _fixed_executable(paths: tuple[Path, ...]) -> str | None:
+    for path in paths:
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return None
+
+
+def _policies() -> list[Path]:
+    return sorted(path for path in _CPUFREQ_ROOT.glob("policy*") if path.is_dir())
+
+
+def _available_governors(policy: Path) -> tuple[str, ...]:
+    try:
+        return tuple((policy / "scaling_available_governors").read_text().split())
+    except OSError:
+        return ()
+
+
+def _read_governor(policy: Path) -> str | None:
+    try:
+        value = (policy / "scaling_governor").read_text().strip()
+    except OSError:
+        return None
+    return value or None
+
+
+def _write_governor(policy: Path, governor: str) -> None:
+    (policy / "scaling_governor").write_text(governor)
+
+
+def _current_governors() -> tuple[list[str], bool]:
+    governors: list[str] = []
+    policies = _policies()
+    complete = bool(policies)
+    for policy in policies:
+        value = _read_governor(policy)
+        if value is None:
+            complete = False
+        else:
+            governors.append(value)
+    return governors, complete
+
+
+def _profile_from_governors(governors: list[str]) -> str:
+    unique = set(governors)
+    if unique == {"performance"}:
+        return "performance"
+    if unique == {"powersave"}:
+        return "eco"
+    if unique and unique <= {"schedutil", "ondemand", "conservative"}:
+        return "balanced"
+    return "unknown"
+
+
+def _suspend_supported() -> bool:
+    try:
+        states = _POWER_STATE.read_text().split()
+    except OSError:
+        return False
+    return "mem" in states and _fixed_executable(_SYSTEMCTL_PATHS) is not None
+
+
+def _rtc_sleep_supported() -> bool:
+    return (_RTC_WAKEALARM.exists() and
+            _fixed_executable(_SYSTEMCTL_PATHS) is not None)
+
+
+def _status_fields() -> dict:
+    governors, complete = _current_governors()
+    return {
+        "state": "awake",
+        # Never report a healthy logical profile from a partial sysfs read.
+        # That would hide a heterogeneous or inaccessible policy from the
+        # unprivileged controller.
+        "profile": (_profile_from_governors(governors)
+                    if complete else "unknown"),
+        "governors": governors,
+        "suspend_supported": _suspend_supported(),
+        "rtc_sleep_supported": _rtc_sleep_supported(),
+    }
+
+
+def _result(ok: bool, code: str, **extra) -> dict:
+    return {"ok": ok, "code": code, **_status_fields(), **extra}
+
+
+def _apply_profile(profile: str) -> dict:
+    candidates = _GOVERNOR_CANDIDATES[profile]
+    policies = _policies()
+    if not policies:
+        return _result(False, "cpufreq_unavailable")
+
+    # Preflight every policy before writing any of them, avoiding an avoidable
+    # half-applied profile when heterogeneous policies expose different sets.
+    selected: list[tuple[Path, str]] = []
+    original: list[tuple[Path, str]] = []
+    for policy in policies:
+        available = _available_governors(policy)
+        governor = next((item for item in candidates if item in available), None)
+        if governor is None:
+            return _result(False, "governor_unsupported")
+        current = _read_governor(policy)
+        if current is None:
+            return _result(False, "governor_read_failed")
+        selected.append((policy, governor))
+        original.append((policy, current))
+    for policy, governor in selected:
+        try:
+            _write_governor(policy, governor)
+        except OSError:
+            rolled_back = _rollback_governors(original)
+            suffix = "rolled_back" if rolled_back else "rollback_failed"
+            return _result(False, f"governor_write_failed_{suffix}")
+    readback: list[str] = []
+    for policy, expected in selected:
+        actual = _read_governor(policy)
+        if actual != expected:
+            rolled_back = _rollback_governors(original)
+            suffix = "rolled_back" if rolled_back else "rollback_failed"
+            return _result(False, f"governor_verify_failed_{suffix}")
+        readback.append(actual)
+    expected_profile = "balanced" if profile == "auto" else profile
+    if _profile_from_governors(readback) != expected_profile:
+        rolled_back = _rollback_governors(original)
+        suffix = "rolled_back" if rolled_back else "rollback_failed"
+        return _result(False, f"governor_verify_failed_{suffix}")
+    return _result(True, "ok", requested_profile=profile)
+
+
+def _rollback_governors(original: list[tuple[Path, str]]) -> bool:
+    """Best-effort all-policy rollback, followed by complete verification."""
+    ok = True
+    for policy, governor in original:
+        try:
+            _write_governor(policy, governor)
+        except OSError:
+            ok = False
+    for policy, expected in original:
+        if _read_governor(policy) != expected:
+            ok = False
+    return ok
+
+
+def _run_fixed(argv: list[str]) -> tuple[bool, str]:
+    try:
+        completed = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return False, "exec_failed"
+    return (True, "ok") if completed.returncode == 0 else (False, "command_failed")
+
+
+def _systemctl(operation: str, *, no_block: bool) -> dict:
+    binary = _fixed_executable(_SYSTEMCTL_PATHS)
+    if binary is None:
+        return _result(False, "systemctl_unavailable")
+    # operation reaches here only from fixed branches in dispatch(), never argv.
+    command = [binary]
+    if no_block:
+        command.append("--no-block")
+    command.append(operation)
+    ok, code = _run_fixed(command)
+    return _result(ok, code)
+
+
+def _sleep_for(minutes: int) -> dict:
+    """Arm RTC wake then request real poweroff; never wait out the interval.
+
+    The relative wakealarm is written directly to the kernel RTC interface.
+    systemd is then asked to halt asynchronously.  On the next cold boot the
+    user service publishes the unsolicited ``id=0 awake`` report.
+    """
+    if not MIN_SLEEP_MINUTES <= minutes <= MAX_SLEEP_MINUTES:
+        return _result(False, "sleep_out_of_range")
+    systemctl = _fixed_executable(_SYSTEMCTL_PATHS)
+    if systemctl is None or not _RTC_WAKEALARM.exists():
+        return _result(False, "rtc_sleep_unsupported")
+
+    seconds = minutes * 60
+    before = time.time()
+    try:
+        # Raspberry Pi 5's documented low-power RTC path: arm a relative alarm
+        # in sysfs, then halt.  It cold-boots at the alarm only when the EEPROM
+        # settings documented in README.md are configured.
+        _RTC_WAKEALARM.write_text("0")
+        _RTC_WAKEALARM.write_text(f"+{seconds}")
+    except OSError:
+        return _result(False, "rtc_arm_failed")
+    try:
+        armed_epoch = int(_RTC_WAKEALARM.read_text().strip())
+    except (OSError, ValueError):
+        _clear_alarm()
+        return _result(False, "rtc_verify_failed")
+    after = time.time()
+    # A relative sysfs alarm is reported back as an absolute RTC epoch. Allow
+    # small scheduling/clock rounding slack, but never halt on a stale alarm.
+    if not before + seconds - 2 <= armed_epoch <= after + seconds + 2:
+        _clear_alarm()
+        return _result(False, "rtc_verify_failed")
+    ok, code = _run_fixed([systemctl, "--no-block", "halt"])
+    if not ok:
+        # Avoid leaving a surprising alarm armed after a rejected halt.
+        _clear_alarm()
+        return _result(False, "poweroff_failed")
+    return _result(True, "ok", wake_after_seconds=seconds)
+
+
+def _clear_alarm() -> None:
+    try:
+        _RTC_WAKEALARM.write_text("0")
+    except OSError:
+        pass
+
+
+def dispatch(action: str, value: str | None = None) -> dict:
+    if action == "status":
+        return _result(True, "ok")
+    if action == "profile":
+        assert value in _GOVERNOR_CANDIDATES
+        return _apply_profile(value)
+    if action == "reboot":
+        return _systemctl("reboot", no_block=True)
+    if action == "halt":
+        # Pi 5's RTC low-power wake path is halt plus EEPROM power policy; see
+        # README.  This is intentionally distinct from generic poweroff.
+        return _systemctl("halt", no_block=True)
+    if action == "poweroff":
+        return _systemctl("poweroff", no_block=True)
+    if action == "suspend":
+        if not _suspend_supported():
+            return _result(False, "suspend_unsupported")
+        # Synchronous: success is reported only after the machine resumes.
+        return _systemctl("suspend", no_block=False)
+    if action == "sleep_for":
+        assert value is not None
+        return _sleep_for(int(value))
+    raise AssertionError("argparse admitted an unknown action")
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="hw1-power-helper", allow_abbrev=False)
+    subs = parser.add_subparsers(dest="action", required=True)
+    subs.add_parser("status")
+    profile = subs.add_parser("profile")
+    profile.add_argument("value", choices=tuple(_GOVERNOR_CANDIDATES))
+    subs.add_parser("reboot")
+    subs.add_parser("halt")
+    subs.add_parser("poweroff")
+    subs.add_parser("suspend")
+    sleep = subs.add_parser("sleep_for")
+    sleep.add_argument("value", type=int, choices=range(MIN_SLEEP_MINUTES,
+                                                        MAX_SLEEP_MINUTES + 1))
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    result = dispatch(args.action, getattr(args, "value", None))
+    print(json.dumps(result, separators=(",", ":"), sort_keys=True))
+    return 0 if result["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

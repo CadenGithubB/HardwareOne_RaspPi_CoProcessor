@@ -1,0 +1,6 @@
+# id	repository	revision	filename	bytes	sha256
+# Pinned, text-only GGUF candidates for the CM5 throughput sweep. The active
+# service model is discovered from config.yaml and is used as the baseline; it
+# is deliberately not downloaded or replaced by this manifest.
+qwen3.5-2b-q4_0	bartowski/Qwen_Qwen3.5-2B-GGUF	7d26695454df6de5fbcce2e58681e62dae06ce43	Qwen_Qwen3.5-2B-Q4_0.gguf	1296764000	91c102fc9a86de80e427057ee938e1e34fcaf3bba956b7296e252406e05f36f6
+granite-4.1-3b-q4_0	ibm-granite/granite-4.1-3b-GGUF	ab4701481089b58a082ef63cc1cee738887293ff	granite-4.1-3b-Q4_0.gguf	1984608864	d7e739eb4572c43d20dd6536c12fa29e1fc81b8f48e64048265d558e0441cb0e

@@ -1,0 +1,13 @@
+# Install as /etc/sudoers.d/hw1-oc-helper, root:root mode 0440.
+# Every permitted argument vector is finite; the helper validates it again.
+
+Cmnd_Alias HW1_OC = \
+    /usr/local/libexec/hw1-oc-helper status, \
+    /usr/local/libexec/hw1-oc-helper normalize-stock, \
+    /usr/local/libexec/hw1-oc-helper ^normalize-stock (2400|2500|2600|2700|2800|2900|3000) (0|10000|20000|30000|40000|50000)$, \
+    /usr/local/libexec/hw1-oc-helper clear-staged, \
+    /usr/local/libexec/hw1-oc-helper reboot-try, \
+    /usr/local/libexec/hw1-oc-helper reboot-normal, \
+    /usr/local/libexec/hw1-oc-helper ^stage (2400|2500|2600|2700|2800|2900|3000) (0|10000|20000|30000|40000|50000)$
+
+%hw1-oc ALL=(root) NOPASSWD: HW1_OC

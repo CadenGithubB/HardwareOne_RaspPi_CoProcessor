@@ -1,0 +1,1057 @@
+#!/usr/bin/python3 -I
+"""Root-owned HardwareOne CM5 PWM fan controller.
+
+The daemon owns the Raspberry Pi ``pwm-fan`` hwmon device while it is running.
+It discovers the device and its bound thermal zone by sysfs identity, then
+drives ``pwm1`` directly while the kernel's ``step_wise`` governor stays in
+charge of the zone.
+
+Coexisting with the governor, rather than displacing it via the ``user_space``
+policy, is deliberate: Raspberry Pi kernels ship ``step_wise`` as the only
+thermal governor, and disabling the zone outright would forfeit its critical
+trip.  The kernel writes the cooling device only when a trip target changes,
+so the two never fight continuously -- the poll loop re-reads the real duty
+every tick and re-asserts, which bounds any kernel override to one interval.
+
+Because the policy is therefore always ``step_wise``, writing it is a no-op and
+cannot hand the fan back.  Every release path instead bounces the zone through
+``_return_to_kernel`` so the thermal core re-evaluates and resumes control, or
+attempts verified maximum PWM if even that fails.  The systemd unit also
+invokes best-effort ``--restore-kernel`` discovery before start and after stop;
+this covers a watchdog SIGKILL while the unique topology remains discoverable.
+
+No caller-provided path reaches sysfs.  The only runtime command surface is a
+root:hw1-fan Unix socket with the finite grammar::
+
+    status
+    mode auto
+    mode quiet
+    mode max
+
+Each connection carries one ASCII command and receives one compact JSON line.
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import grp
+import json
+import logging
+import math
+import os
+import re
+import selectors
+import signal
+import socket
+import stat
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Callable
+
+
+LOG = logging.getLogger("hw1-fan-controller")
+
+DEFAULT_CONFIG_PATH = Path("/etc/hw1-fan-controller.json")
+DEFAULT_SOCKET_PATH = Path("/run/hw1-fan-controller/control.sock")
+SOCKET_GROUP = "hw1-fan"
+MAX_PWM = 255
+MAX_REQUEST_BYTES = 64
+CLIENT_TIMEOUT_S = 1.0
+MAX_CLIENTS = 16
+# Bounded so a genuinely failing sysfs write still reaches the fail-safe path
+# promptly; only a lost race against the kernel governor should ever retry.
+_PWM_WRITE_ATTEMPTS = 2
+
+MODES = ("auto", "quiet", "max")
+HEALTH_TOKENS = {
+    "ok",
+    "boosting",
+    "tach_unavailable",
+    "safety_temp",
+    "safety_stall",
+    "unavailable",
+    "io_error",
+}
+
+_CDEV_LINK_RE = re.compile(r"cdev[0-9]+\Z")
+
+
+class ConfigError(ValueError):
+    """The root-owned configuration is invalid."""
+
+
+class DiscoveryError(RuntimeError):
+    """The expected unique pwm-fan topology is not available."""
+
+
+class FanIOError(RuntimeError):
+    """A bounded sysfs operation failed or did not verify."""
+
+
+@dataclasses.dataclass(frozen=True)
+class CurveStep:
+    temp_mc: int
+    pwm: int
+
+
+@dataclasses.dataclass(frozen=True)
+class Config:
+    socket_path: Path
+    poll_interval_s: float
+    rediscover_interval_s: float
+    quiet_pwm: int
+    start_boost_pwm: int
+    start_boost_s: float
+    stall_timeout_s: float
+    safety_temp_mc: int
+    safety_hysteresis_mc: int
+    curve_hysteresis_mc: int
+    curve: tuple[CurveStep, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class SysfsRoots:
+    hwmon: Path = Path("/sys/class/hwmon")
+    thermal: Path = Path("/sys/class/thermal")
+
+
+@dataclasses.dataclass(frozen=True)
+class FanHardware:
+    hwmon: Path
+    cooling_device: Path
+    thermal_zone: Path
+    pwm_path: Path
+    rpm_path: Path | None
+    temp_path: Path
+    policy_path: Path
+    available_policies_path: Path
+    mode_path: Path
+
+
+@dataclasses.dataclass
+class _Client:
+    buffer: bytearray
+    deadline: float
+
+
+DEFAULT_CURVE = (
+    CurveStep(50_000, 75),
+    CurveStep(60_000, 125),
+    CurveStep(67_500, 175),
+    CurveStep(75_000, 250),
+)
+
+_CONFIG_KEYS = {
+    "socket_path",
+    "poll_interval_s",
+    "rediscover_interval_s",
+    "quiet_pwm",
+    "start_boost_pwm",
+    "start_boost_s",
+    "stall_timeout_s",
+    "safety_temp_mc",
+    "safety_hysteresis_mc",
+    "curve_hysteresis_mc",
+    "curve",
+}
+
+
+def _strict_int(
+    mapping: dict,
+    key: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = mapping.get(key, default)
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise ConfigError(f"{key} must be an integer in {minimum}..{maximum}")
+    return value
+
+
+def _strict_float(
+    mapping: dict,
+    key: str,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    value = mapping.get(key, default)
+    if type(value) not in (int, float):
+        raise ConfigError(f"{key} must be a number in {minimum}..{maximum}")
+    result = float(value)
+    if not math.isfinite(result) or not minimum <= result <= maximum:
+        raise ConfigError(f"{key} must be a finite number in {minimum}..{maximum}")
+    return result
+
+
+def _strict_socket_path(mapping: dict) -> Path:
+    value = mapping.get("socket_path", str(DEFAULT_SOCKET_PATH))
+    if type(value) is not str or "\x00" in value:
+        raise ConfigError(f"socket_path must be {DEFAULT_SOCKET_PATH}")
+    path = Path(value)
+    # This root service chowns/chmods the socket parent. Keep that mutation
+    # confined to its systemd RuntimeDirectory rather than allowing a config
+    # typo to seize an arbitrary existing directory.
+    if path != DEFAULT_SOCKET_PATH:
+        raise ConfigError(f"socket_path must be {DEFAULT_SOCKET_PATH}")
+    return path
+
+
+def config_from_mapping(raw: object) -> Config:
+    """Validate a decoded JSON object without coercing ambiguous values."""
+    if type(raw) is not dict:
+        raise ConfigError("configuration must be a JSON object")
+    unknown = set(raw) - _CONFIG_KEYS
+    if unknown:
+        raise ConfigError(f"unknown configuration key: {sorted(unknown)[0]}")
+
+    quiet_pwm = _strict_int(raw, "quiet_pwm", 75, 1, MAX_PWM - 1)
+    safety_temp_mc = _strict_int(raw, "safety_temp_mc", 80_000, 50_000, 105_000)
+    safety_hysteresis_mc = _strict_int(
+        raw, "safety_hysteresis_mc", 5_000, 0, 30_000
+    )
+    if safety_hysteresis_mc >= safety_temp_mc:
+        raise ConfigError("safety_hysteresis_mc must be below safety_temp_mc")
+
+    raw_curve = raw.get("curve")
+    if raw_curve is None:
+        curve = DEFAULT_CURVE
+    else:
+        if type(raw_curve) is not list or not 1 <= len(raw_curve) <= 16:
+            raise ConfigError("curve must contain 1..16 step objects")
+        parsed: list[CurveStep] = []
+        for index, item in enumerate(raw_curve):
+            if type(item) is not dict or set(item) != {"temp_mc", "pwm"}:
+                raise ConfigError(
+                    f"curve[{index}] must contain only temp_mc and pwm"
+                )
+            temp_mc = _strict_int(item, "temp_mc", 0, 20_000, 105_000)
+            pwm = _strict_int(item, "pwm", 0, 1, MAX_PWM)
+            parsed.append(CurveStep(temp_mc, pwm))
+        curve = tuple(parsed)
+
+    for previous, current in zip(curve, curve[1:]):
+        if current.temp_mc <= previous.temp_mc:
+            raise ConfigError("curve temperatures must be strictly increasing")
+        if current.pwm < previous.pwm:
+            raise ConfigError("curve PWM values must be non-decreasing")
+
+    boost_pwm = _strict_int(raw, "start_boost_pwm", MAX_PWM, 1, MAX_PWM)
+    required_boost = max(quiet_pwm, *(step.pwm for step in curve))
+    if boost_pwm < required_boost:
+        raise ConfigError("start_boost_pwm must be at least every normal setpoint")
+
+    return Config(
+        socket_path=_strict_socket_path(raw),
+        poll_interval_s=_strict_float(raw, "poll_interval_s", 1.0, 0.1, 10.0),
+        rediscover_interval_s=_strict_float(
+            raw, "rediscover_interval_s", 5.0, 0.5, 60.0
+        ),
+        quiet_pwm=quiet_pwm,
+        start_boost_pwm=boost_pwm,
+        start_boost_s=_strict_float(raw, "start_boost_s", 0.75, 0.1, 10.0),
+        stall_timeout_s=_strict_float(raw, "stall_timeout_s", 4.0, 1.0, 60.0),
+        safety_temp_mc=safety_temp_mc,
+        safety_hysteresis_mc=safety_hysteresis_mc,
+        curve_hysteresis_mc=_strict_int(
+            raw, "curve_hysteresis_mc", 5_000, 0, 30_000
+        ),
+        curve=curve,
+    )
+
+
+def load_config(path: Path, *, require_root_owner: bool) -> Config:
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ConfigError(f"cannot stat configuration: {exc.strerror}") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ConfigError("configuration must be a regular file, not a symlink")
+    if require_root_owner:
+        if metadata.st_uid != 0:
+            raise ConfigError("configuration must be owned by root")
+        if metadata.st_mode & 0o022:
+            raise ConfigError("configuration must not be group/world writable")
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ConfigError(f"cannot parse configuration: {exc}") from exc
+    return config_from_mapping(raw)
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError) as exc:
+        raise FanIOError(f"cannot read {path.name}") from exc
+
+
+def _read_int(path: Path, minimum: int, maximum: int) -> int:
+    text = _read_text(path)
+    try:
+        value = int(text, 10)
+    except ValueError as exc:
+        raise FanIOError(f"invalid integer in {path.name}") from exc
+    if not minimum <= value <= maximum:
+        raise FanIOError(f"out-of-range integer in {path.name}")
+    return value
+
+
+def _write_verified(path: Path, value: str) -> None:
+    try:
+        path.write_text(value, encoding="ascii")
+    except (OSError, UnicodeError) as exc:
+        raise FanIOError(f"cannot write {path.name}") from exc
+    if _read_text(path) != value:
+        raise FanIOError(f"readback mismatch for {path.name}")
+
+
+def _read_name(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return None
+
+
+def _resolved(path: Path) -> Path:
+    try:
+        return path.resolve(strict=True)
+    except OSError as exc:
+        raise DiscoveryError(f"broken sysfs link: {path.name}") from exc
+
+
+def _discover_hardware(
+    roots: SysfsRoots = SysfsRoots(),
+) -> FanHardware:
+    """Find one pwmfan, its one pwm-fan cdev, and the one bound zone."""
+    hwmons = sorted(
+        path
+        for path in roots.hwmon.glob("hwmon*")
+        if path.is_dir() and _read_name(path / "name") == "pwmfan"
+    )
+    if len(hwmons) != 1:
+        raise DiscoveryError(f"expected one pwmfan hwmon, found {len(hwmons)}")
+    hwmon = hwmons[0]
+    pwm_path = hwmon / "pwm1"
+    if not pwm_path.is_file():
+        raise DiscoveryError("pwmfan does not expose pwm1")
+    rpm_candidate = hwmon / "fan1_input"
+    rpm_path = rpm_candidate if rpm_candidate.is_file() else None
+
+    cooling_devices = sorted(
+        path
+        for path in roots.thermal.glob("cooling_device*")
+        if path.is_dir() and _read_name(path / "type") == "pwm-fan"
+    )
+    if len(cooling_devices) != 1:
+        raise DiscoveryError(
+            f"expected one pwm-fan cooling device, found {len(cooling_devices)}"
+        )
+    cooling_device = cooling_devices[0]
+    cooling_target = _resolved(cooling_device)
+
+    bound_zones: list[Path] = []
+    for zone in sorted(roots.thermal.glob("thermal_zone*")):
+        if not zone.is_dir():
+            continue
+        bound = False
+        for link in zone.iterdir():
+            if not _CDEV_LINK_RE.fullmatch(link.name) or not link.is_symlink():
+                continue
+            if _resolved(link) == cooling_target:
+                bound = True
+                break
+        if bound:
+            bound_zones.append(zone)
+    if len(bound_zones) != 1:
+        raise DiscoveryError(
+            f"expected pwm-fan bound to one thermal zone, found {len(bound_zones)}"
+        )
+    zone = bound_zones[0]
+    temp_path = zone / "temp"
+    policy_path = zone / "policy"
+    available_path = zone / "available_policies"
+    mode_path = zone / "mode"
+    if not temp_path.is_file() or not policy_path.is_file() or not available_path.is_file():
+        raise DiscoveryError("bound thermal zone lacks temp/policy interfaces")
+    # Returning ownership depends on bouncing the zone, so a missing mode
+    # attribute is a hard topology failure rather than a lost optimization.
+    if not mode_path.is_file():
+        raise DiscoveryError("bound thermal zone lacks a mode interface")
+
+    policies = set(_read_text(available_path).split())
+    if "step_wise" not in policies:
+        raise DiscoveryError("bound thermal zone lacks step_wise policy")
+
+    return FanHardware(
+        hwmon=hwmon,
+        cooling_device=cooling_device,
+        thermal_zone=zone,
+        pwm_path=pwm_path,
+        rpm_path=rpm_path,
+        temp_path=temp_path,
+        policy_path=policy_path,
+        available_policies_path=available_path,
+        mode_path=mode_path,
+    )
+
+
+def discover_hardware(roots: SysfsRoots = SysfsRoots()) -> FanHardware:
+    try:
+        return _discover_hardware(roots)
+    except OSError as exc:
+        raise DiscoveryError("cannot enumerate fan sysfs topology") from exc
+
+
+def _return_to_kernel(hardware: FanHardware) -> None:
+    """Give the fan back to the kernel governor and make it re-assert.
+
+    This daemon coexists with ``step_wise`` rather than displacing it, so the
+    policy is already ``step_wise`` and writing it again is a no-op. That alone
+    would strand ``pwm1`` at whatever duty this daemon last commanded, because
+    the thermal core only writes the cooling device when a trip target changes.
+    Bouncing the zone forces a re-evaluation, after which the kernel steps the
+    fan to the level its own curve wants for the current temperature.
+
+    The two mode writes are deliberately adjacent: the zone is unmonitored
+    between them, so nothing may be interposed there. Dying inside that window
+    would leave the zone disabled, which the ``ExecStartPre`` restore heals on
+    the next start because this always ends on a verified ``enabled``.
+    """
+    _write_verified(hardware.policy_path, "step_wise")
+    _write_verified(hardware.mode_path, "disabled")
+    _write_verified(hardware.mode_path, "enabled")
+
+
+def restore_kernel_policy(roots: SysfsRoots = SysfsRoots()) -> None:
+    _return_to_kernel(discover_hardware(roots))
+
+
+class FanController:
+    """Mode, curve, boost, tach, and safety state independent of the socket."""
+
+    def __init__(
+        self,
+        config: Config,
+        *,
+        roots: SysfsRoots = SysfsRoots(),
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.config = config
+        self.roots = roots
+        self.clock = clock
+        self.requested_mode = "auto"
+        self.effective_mode = "max"
+        self.temp_mc: int | None = None
+        self.target_pwm = MAX_PWM
+        self.pwm = 0
+        self.rpm: int | None = None
+        self.health = "unavailable"
+        self._hardware: FanHardware | None = None
+        self._next_discovery = 0.0
+        self._auto_level: int | None = None
+        self._boost_until = 0.0
+        self._zero_rpm_since: float | None = None
+        self._stall_latched = False
+        self._temp_latched = False
+
+    def _auto_pwm(self, temp_mc: int) -> int:
+        curve = self.config.curve
+        if self._auto_level is None:
+            level = -1
+            for index, step in enumerate(curve):
+                if temp_mc < step.temp_mc:
+                    break
+                level = index
+            self._auto_level = level
+
+        while (
+            self._auto_level + 1 < len(curve)
+            and temp_mc >= curve[self._auto_level + 1].temp_mc
+        ):
+            self._auto_level += 1
+        while self._auto_level >= 0:
+            step = curve[self._auto_level]
+            if temp_mc >= step.temp_mc - self.config.curve_hysteresis_mc:
+                break
+            self._auto_level -= 1
+        return 0 if self._auto_level < 0 else curve[self._auto_level].pwm
+
+    def _attach(self, now: float) -> bool:
+        hardware: FanHardware | None = None
+        try:
+            hardware = discover_hardware(self.roots)
+            current_pwm = _read_int(hardware.pwm_path, 0, MAX_PWM)
+        except (DiscoveryError, FanIOError) as exc:
+            if hardware is not None:
+                try:
+                    _return_to_kernel(hardware)
+                except FanIOError:
+                    # If ownership cannot be returned to the kernel, leave the
+                    # only safe fixed command behind before forgetting sysfs.
+                    try:
+                        _write_verified(hardware.pwm_path, str(MAX_PWM))
+                    except FanIOError:
+                        pass
+            self._hardware = None
+            self._next_discovery = now + self.config.rediscover_interval_s
+            self.health = "unavailable"
+            self.effective_mode = "max"
+            self.target_pwm = MAX_PWM
+            self.temp_mc = None
+            self.rpm = None
+            LOG.warning("fan discovery/activation unavailable: %s", exc)
+            return False
+        self._hardware = hardware
+        self.pwm = current_pwm
+        self._auto_level = None
+        self._boost_until = 0.0
+        self._zero_rpm_since = None
+        self._stall_latched = False
+        self._temp_latched = False
+        LOG.info(
+            "controlling %s through %s bound to %s",
+            hardware.hwmon,
+            hardware.cooling_device,
+            hardware.thermal_zone,
+        )
+        return True
+
+    def _best_effort_max(self) -> bool:
+        if self._hardware is None:
+            return False
+        try:
+            _write_verified(self._hardware.pwm_path, str(MAX_PWM))
+            self.pwm = MAX_PWM
+        except FanIOError:
+            return False
+        return True
+
+    def _io_failure(self, now: float, exc: Exception) -> None:
+        LOG.error("fan sysfs I/O failure; requesting maximum PWM: %s", exc)
+        hardware = self._hardware
+        max_confirmed = self._best_effort_max()
+        if not max_confirmed and hardware is not None:
+            # A failed Max write must not leave a low manual duty behind.
+            # Return ownership immediately.
+            try:
+                _return_to_kernel(hardware)
+            except FanIOError as restore_exc:
+                LOG.critical(
+                    "cannot confirm maximum PWM or restore kernel policy: %s",
+                    restore_exc,
+                )
+        self.health = "io_error"
+        self.effective_mode = "max"
+        self.target_pwm = MAX_PWM
+        self.temp_mc = None
+        self.rpm = None
+        self._hardware = None
+        self._next_discovery = now + self.config.rediscover_interval_s
+
+    def _update_temp_latch(self, temp_mc: int) -> None:
+        if temp_mc >= self.config.safety_temp_mc:
+            self._temp_latched = True
+        elif temp_mc <= (
+            self.config.safety_temp_mc - self.config.safety_hysteresis_mc
+        ):
+            self._temp_latched = False
+
+    def _update_stall(
+        self,
+        expected_pwm: int,
+        rpm: int | None,
+        now: float,
+    ) -> None:
+        if expected_pwm == 0:
+            self._zero_rpm_since = None
+            self._stall_latched = False
+            self._boost_until = 0.0
+            return
+        if rpm is None:
+            self._zero_rpm_since = None
+            self._stall_latched = False
+            return
+        if rpm > 0:
+            self._zero_rpm_since = None
+            self._stall_latched = False
+            return
+        if self._zero_rpm_since is None:
+            self._zero_rpm_since = now
+            self._boost_until = max(
+                self._boost_until, now + self.config.start_boost_s
+            )
+        deadline = max(self._zero_rpm_since, self._boost_until)
+        if now >= deadline + self.config.stall_timeout_s:
+            self._stall_latched = True
+
+    def _update(self, now: float) -> None:
+        assert self._hardware is not None
+        hardware = self._hardware
+        try:
+            temp_mc = _read_int(hardware.temp_path, 0, 150_000)
+            actual_pwm = _read_int(hardware.pwm_path, 0, MAX_PWM)
+            rpm = (
+                _read_int(hardware.rpm_path, 0, 100_000)
+                if hardware.rpm_path is not None
+                else None
+            )
+            self.temp_mc = temp_mc
+            self.rpm = rpm
+            self._update_temp_latch(temp_mc)
+
+            if self.requested_mode == "auto":
+                normal_pwm = self._auto_pwm(temp_mc)
+            elif self.requested_mode == "quiet":
+                normal_pwm = self.config.quiet_pwm
+            else:
+                normal_pwm = MAX_PWM
+
+            safety_base = MAX_PWM if self._temp_latched else normal_pwm
+            # A tach-less fan still needs a launch pulse when coming from
+            # pwm=0. With a tach, _update_stall also launches a stopped rotor
+            # whose previous non-zero PWM was below its reliable start duty.
+            if (
+                safety_base > 0
+                and actual_pwm == 0
+                and (rpm is None or rpm == 0)
+                and now >= self._boost_until
+            ):
+                self._boost_until = now + self.config.start_boost_s
+            self._update_stall(safety_base, rpm, now)
+
+            if self._temp_latched:
+                command_pwm = MAX_PWM
+                effective = "max"
+                health = "safety_temp"
+            elif self._stall_latched:
+                command_pwm = MAX_PWM
+                effective = "max"
+                health = "safety_stall"
+            elif now < self._boost_until and safety_base > 0:
+                command_pwm = max(safety_base, self.config.start_boost_pwm)
+                effective = self.requested_mode
+                health = "boosting"
+            else:
+                command_pwm = safety_base
+                effective = self.requested_mode
+                health = "tach_unavailable" if rpm is None else "ok"
+
+            if command_pwm != actual_pwm:
+                # The kernel governor still owns this cooling device and writes
+                # it whenever a trip target changes, so a readback mismatch is
+                # ambiguous: it is usually a lost race against that write, not
+                # failing hardware. Retry once to tell them apart. A real sysfs
+                # fault is persistent and still fails the second attempt, which
+                # preserves the fail-safe below unchanged.
+                for attempt in range(_PWM_WRITE_ATTEMPTS):
+                    try:
+                        _write_verified(hardware.pwm_path, str(command_pwm))
+                    except FanIOError:
+                        if attempt + 1 >= _PWM_WRITE_ATTEMPTS:
+                            raise
+                        continue
+                    actual_pwm = _read_int(hardware.pwm_path, 0, MAX_PWM)
+                    if actual_pwm == command_pwm:
+                        break
+                    if attempt + 1 >= _PWM_WRITE_ATTEMPTS:
+                        raise FanIOError(
+                            "pwm1 did not retain the commanded value"
+                        )
+
+            self.target_pwm = command_pwm
+            self.pwm = actual_pwm
+            self.effective_mode = effective
+            self.health = health
+        except FanIOError as exc:
+            self._io_failure(now, exc)
+
+    def tick(self, now: float | None = None) -> dict:
+        timestamp = self.clock() if now is None else now
+        if self._hardware is None:
+            if timestamp < self._next_discovery:
+                return self.snapshot()
+            if not self._attach(timestamp):
+                return self.snapshot()
+        self._update(timestamp)
+        return self.snapshot()
+
+    def set_requested_mode(self, mode: str) -> None:
+        if mode not in MODES:
+            raise ValueError("invalid fan mode")
+        if mode == self.requested_mode:
+            return
+        self.requested_mode = mode
+        if mode == "auto":
+            self._auto_level = None
+
+    def snapshot(self, *, ok: bool | None = None, code: str | None = None) -> dict:
+        if self.health not in HEALTH_TOKENS:
+            raise AssertionError("internal invalid fan health token")
+        operational = self.health not in {"unavailable", "io_error"}
+        return {
+            "ok": operational if ok is None else ok,
+            "code": (
+                ("ok" if operational else self.health) if code is None else code
+            ),
+            "requested_mode": self.requested_mode,
+            "effective_mode": self.effective_mode,
+            "temp_mc": self.temp_mc,
+            "target_pwm": max(0, min(MAX_PWM, int(self.target_pwm))),
+            "pwm": max(0, min(MAX_PWM, int(self.pwm))),
+            "rpm": self.rpm,
+            "health": self.health,
+        }
+
+    def command(self, command: str) -> dict:
+        if command == "status":
+            return self.tick()
+        if command in {"mode auto", "mode quiet", "mode max"}:
+            previous_mode = self.requested_mode
+            previous_auto_level = self._auto_level
+            self.set_requested_mode(command[5:])
+            result = self.tick()
+            if not result["ok"]:
+                # A failed request is terminal on the UART protocol. Preserve
+                # the prior logical mode so rediscovery cannot silently apply
+                # a change the XIAO was told had failed.
+                self.requested_mode = previous_mode
+                self._auto_level = previous_auto_level
+                return self.snapshot(ok=False, code=result["code"])
+            return result
+        return self.snapshot(ok=False, code="invalid_command")
+
+    def restore(self) -> None:
+        hardware = self._hardware
+        try:
+            if hardware is not None:
+                _return_to_kernel(hardware)
+            else:
+                restore_kernel_policy(self.roots)
+        except (DiscoveryError, FanIOError) as exc:
+            LOG.error("failed to restore kernel step_wise policy: %s", exc)
+            if hardware is not None:
+                try:
+                    _write_verified(hardware.pwm_path, str(MAX_PWM))
+                    self.pwm = MAX_PWM
+                except FanIOError as max_exc:
+                    LOG.critical(
+                        "cannot restore kernel policy or confirm maximum PWM: %s",
+                        max_exc,
+                    )
+        finally:
+            self._hardware = None
+
+
+def _sd_notify(message: str) -> bool:
+    address = os.environ.get("NOTIFY_SOCKET")
+    if not address:
+        return False
+    if address.startswith("@"):  # systemd abstract namespace notation
+        address = "\0" + address[1:]
+    notifier = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    try:
+        notifier.connect(address)
+        notifier.sendall(message.encode("utf-8"))
+    except OSError:
+        return False
+    finally:
+        notifier.close()
+    return True
+
+
+def _watchdog_period() -> float | None:
+    pid_text = os.environ.get("WATCHDOG_PID")
+    if pid_text:
+        try:
+            if int(pid_text) != os.getpid():
+                return None
+        except ValueError:
+            return None
+    try:
+        usec = int(os.environ.get("WATCHDOG_USEC", "0"))
+    except ValueError:
+        return None
+    if usec <= 0:
+        return None
+    return max(0.1, usec / 2_000_000.0)
+
+
+def _socket_group_id() -> int:
+    try:
+        return grp.getgrnam(SOCKET_GROUP).gr_gid
+    except KeyError as exc:
+        raise RuntimeError(f"required group {SOCKET_GROUP!r} does not exist") from exc
+
+
+def _prepare_socket(path: Path) -> socket.socket:
+    if path != DEFAULT_SOCKET_PATH:
+        raise RuntimeError("refusing socket path outside the fixed runtime directory")
+    group_id = _socket_group_id()
+    parent = path.parent
+    if parent.exists() and parent.is_symlink():
+        raise RuntimeError("socket parent must not be a symlink")
+    parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    os.chown(parent, 0, group_id)
+    os.chmod(parent, 0o750)
+
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != 0:
+            raise RuntimeError("refusing to replace non-root or non-socket path")
+        path.unlink()
+
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(str(path))
+        os.chown(path, 0, group_id)
+        os.chmod(path, 0o660)
+        listener.listen(16)
+        listener.setblocking(False)
+    except Exception:
+        listener.close()
+        raise
+    return listener
+
+
+def _decode_request(data: bytes) -> str | None:
+    if not data or len(data) > MAX_REQUEST_BYTES:
+        return None
+    try:
+        command = data.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    if "\r" in command or "\n" in command:
+        return None
+    if command not in {"status", "mode auto", "mode quiet", "mode max"}:
+        return None
+    return command
+
+
+def _send_reply(conn: socket.socket, reply: dict) -> None:
+    payload = json.dumps(reply, separators=(",", ":"), sort_keys=True).encode("ascii")
+    try:
+        conn.setblocking(True)
+        conn.settimeout(0.1)
+        conn.sendall(payload + b"\n")
+    except OSError:
+        pass
+
+
+def _close_client(
+    selector: selectors.BaseSelector,
+    clients: dict[socket.socket, _Client],
+    conn: socket.socket,
+) -> None:
+    try:
+        selector.unregister(conn)
+    except (KeyError, ValueError):
+        pass
+    clients.pop(conn, None)
+    conn.close()
+
+
+def _finish_client(
+    selector: selectors.BaseSelector,
+    clients: dict[socket.socket, _Client],
+    conn: socket.socket,
+    controller: FanController,
+    data: bytes,
+) -> None:
+    command = _decode_request(data)
+    if command is None:
+        reply = controller.snapshot(ok=False, code="invalid_command")
+    else:
+        reply = controller.command(command)
+    _send_reply(conn, reply)
+    _close_client(selector, clients, conn)
+
+
+def run_daemon(config: Config, *, roots: SysfsRoots = SysfsRoots()) -> int:
+    controller = FanController(config, roots=roots)
+    listener = _prepare_socket(config.socket_path)
+    selector = selectors.DefaultSelector()
+    selector.register(listener, selectors.EVENT_READ)
+    clients: dict[socket.socket, _Client] = {}
+    stopping = threading.Event()
+
+    def request_stop(_signum, _frame) -> None:
+        stopping.set()
+
+    previous_term = signal.signal(signal.SIGTERM, request_stop)
+    previous_int = signal.signal(signal.SIGINT, request_stop)
+    watchdog_period = _watchdog_period()
+    now = time.monotonic()
+    status = controller.tick(now)
+    next_tick = now + config.poll_interval_s
+    next_watchdog = now + watchdog_period if watchdog_period else math.inf
+
+    _sd_notify(
+        "READY=1\nSTATUS=fan %s requested=%s effective=%s pwm=%s rpm=%s"
+        % (
+            status["health"],
+            status["requested_mode"],
+            status["effective_mode"],
+            status["pwm"],
+            status["rpm"],
+        )
+    )
+    LOG.info("listening on %s", config.socket_path)
+    try:
+        while not stopping.is_set():
+            now = time.monotonic()
+            if now >= next_tick:
+                status = controller.tick(now)
+                _sd_notify(
+                    "STATUS=fan %s requested=%s effective=%s pwm=%s rpm=%s"
+                    % (
+                        status["health"],
+                        status["requested_mode"],
+                        status["effective_mode"],
+                        status["pwm"],
+                        status["rpm"],
+                    )
+                )
+                next_tick = now + config.poll_interval_s
+            if now >= next_watchdog:
+                _sd_notify("WATCHDOG=1")
+                next_watchdog = now + watchdog_period
+
+            for conn, state in list(clients.items()):
+                if now >= state.deadline:
+                    _finish_client(
+                        selector, clients, conn, controller, bytes(state.buffer)
+                    )
+
+            client_deadline = min(
+                (item.deadline for item in clients.values()), default=math.inf
+            )
+            wake_at = min(next_tick, next_watchdog, client_deadline)
+            timeout = max(0.0, min(1.0, wake_at - time.monotonic()))
+            for key, _mask in selector.select(timeout):
+                if key.fileobj is listener:
+                    while True:
+                        try:
+                            conn, _ = listener.accept()
+                        except BlockingIOError:
+                            break
+                        if len(clients) >= MAX_CLIENTS:
+                            _send_reply(
+                                conn,
+                                controller.snapshot(
+                                    ok=False, code="server_busy"
+                                ),
+                            )
+                            conn.close()
+                            continue
+                        conn.setblocking(False)
+                        clients[conn] = _Client(
+                            bytearray(), time.monotonic() + CLIENT_TIMEOUT_S
+                        )
+                        selector.register(conn, selectors.EVENT_READ)
+                    continue
+
+                conn = key.fileobj
+                state = clients.get(conn)
+                if state is None:
+                    continue
+                try:
+                    chunk = conn.recv(MAX_REQUEST_BYTES + 2)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    _close_client(selector, clients, conn)
+                    continue
+                if not chunk:
+                    _finish_client(
+                        selector, clients, conn, controller, bytes(state.buffer)
+                    )
+                    continue
+                state.buffer.extend(chunk)
+                newline = state.buffer.find(b"\n")
+                if newline >= 0:
+                    line = bytes(state.buffer[:newline])
+                    trailing = bytes(state.buffer[newline + 1 :])
+                    if trailing:
+                        line = b""
+                    _finish_client(selector, clients, conn, controller, line)
+                elif len(state.buffer) > MAX_REQUEST_BYTES:
+                    _finish_client(selector, clients, conn, controller, b"")
+    finally:
+        _sd_notify("STOPPING=1\nSTATUS=restoring kernel fan policy")
+        for conn in list(clients):
+            _close_client(selector, clients, conn)
+        selector.unregister(listener)
+        selector.close()
+        listener.close()
+        try:
+            if stat.S_ISSOCK(config.socket_path.lstat().st_mode):
+                config.socket_path.unlink()
+        except FileNotFoundError:
+            pass
+        controller.restore()
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGINT, previous_int)
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="hw1-fan-controller", allow_abbrev=False
+    )
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
+    actions = parser.add_mutually_exclusive_group()
+    actions.add_argument("--restore-kernel", action="store_true")
+    actions.add_argument("--check-config", action="store_true")
+    return parser
+
+
+def _print_result(ok: bool, code: str) -> None:
+    print(json.dumps({"ok": ok, "code": code}, separators=(",", ":")))
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s hw1-fan-controller: %(message)s",
+    )
+    if args.restore_kernel:
+        try:
+            restore_kernel_policy()
+        except (DiscoveryError, FanIOError) as exc:
+            LOG.error("kernel-policy restore failed: %s", exc)
+            _print_result(False, "unavailable")
+            return 1
+        _print_result(True, "ok")
+        return 0
+
+    try:
+        config = load_config(
+            args.config,
+            require_root_owner=(os.geteuid() == 0),
+        )
+    except ConfigError as exc:
+        LOG.error("configuration rejected: %s", exc)
+        _print_result(False, "config_error")
+        return 2
+    if args.check_config:
+        _print_result(True, "ok")
+        return 0
+    try:
+        return run_daemon(config)
+    except (OSError, RuntimeError) as exc:
+        LOG.error("fatal startup failure: %s", exc)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

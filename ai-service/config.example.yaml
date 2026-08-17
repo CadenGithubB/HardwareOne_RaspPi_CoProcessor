@@ -1,0 +1,140 @@
+# hw1-ai-service configuration. Copy to config.yaml and edit.
+# Credentials do NOT go here — see link.credentials_file.
+
+link:
+  port: /dev/ttyAMA2          # Pi 5 bench and CM5 carrier are identical
+  baud: 2000000               # divider-exact on both ends; must match the XIAO's
+                              # uartLinkBaud / UART_LINK_BAUD_DEFAULT exactly.
+                              # Overruns surface as voicefetch CRC/COBS errors,
+                              # not silent corruption — no HW flow control wired.
+  credentials_file: ~/.config/hw1-ai-service/credentials   # "<user> <pass>", chmod 600
+
+audio:
+  record_seconds: 4.0         # fixed capture window used only when vad: false
+  # Silence endpointing: the XIAO ends the recording on trailing silence, so
+  # short questions don't wait out a full fixed window. Opt-in on the device
+  # too (only this STT flow arms it); pre-VAD firmware falls back to the fixed
+  # window automatically.
+  vad: true
+  vad_silence_ms: 1200        # manual `ask` trailing silence (200..10000).
+                              # Native Hey-Even capture currently selects 1800ms
+                              # in firmware; this host value does not override it.
+                              # Do NOT go below ~1200: a 768ms mid-sentence pause has
+                              # been measured on hardware and a shorter window
+                              # truncates people mid-sentence. Trim the file instead:
+  vad_trim: true              # drop the recorded trailing silence WITHOUT shortening
+                              # the detection window (~38% of a capture is silence).
+                              # false = byte-exact WAV for tools/vad_replay.py.
+  vad_max_seconds: 15.0       # host wait/backstop; matching native cancel/discard exits early
+                              # (device also has its separate 60s recording cap)
+  vad_poll_s: 0.25            # how often the Pi asks the device "still recording?"
+
+# RAM sizing (service checks this at startup — service.ram_check):
+#   8GB Pi:  everything below as-is; LLM up to 3B-class Q4.
+#   4GB Pi:  the deployed English catalog default currently resolves to
+#            medium-streaming-en, not small. Measure RSS with the exact model
+#            directory and the LLM resident before changing tiers. To evaluate
+#            tiny/small, download that architecture deliberately and configure
+#            the downloader's exact returned directory path; aliases such as
+#            moonshine/tiny are not accepted by the current wrapper.
+#   2GB Pi / one-engine mode: set llm.engine: none (voice -> transcript
+#            delivery) or stt.engine: none (text chat only). Either alone
+#            fails gracefully instead of OOM-ing.
+stt:
+  engine: moonshine           # moonshine | zipformer | fake | none
+  model: en                   # currently resolves to downloaded medium-streaming-en;
+                              # use an exact model directory to pin an architecture
+  threads_idle: 4
+  threads_contended: 2
+
+llm:
+  engine: server              # server | fake | none
+  server_bin: /opt/llama.cpp/build/bin/llama-server   # empty = server already running
+  # Benched on a Pi 5 (llama-bench -p 128 -n 64 -t 4, 4GB, power-clean):
+  #   Qwen3-1.7B Q4_0    pp 91.6  tg 10.9   <- picked: fastest prefill by 29%
+  #   Qwen3-1.7B IQ4_NL  pp 70.8  tg 10.9
+  #   Qwen3-1.7B Q4_K_M  pp 56.5  tg  9.2
+  #   Qwen3-1.7B Q5_K_M  pp 47.4  tg  7.9
+  #   Qwen3-0.6B Q4_K_M  pp 162.6 tg 28.6   (the small fallback)
+  # Q4_0 wins because llama.cpp repacks it onto the ARM i8mm/dotprod GEMM
+  # kernels; that lands on prefill, which is compute-bound. Decode is
+  # bandwidth-bound (~10 GB/s here) so it tracks file size, not quant type.
+  # Bench any candidate before trusting a size estimate — IQ4_XS is smaller
+  # than Q4_0 and slower on this CPU.
+  model: /opt/models/Qwen3-1.7B-Q4_0.gguf
+  port: 8080
+  max_tokens: 250             # output-length cap only. Does NOT change time-to-
+                              # first-token (that's prefill); thinking is disabled
+                              # so every token is answer text. Higher = long answers
+                              # (recipes, lists) finish instead of truncating, at the
+                              # cost of more decode time (~10.9 tok/s) on those alone.
+  # Keep 8 for longer conversational context. If later-turn TTFT becomes more
+  # important, 6 or 4 is a reversible latency/context tradeoff to benchmark
+  # after verifying llama-server's actual prompt-cache reuse.
+  history_turns: 8
+  # Static, truthful capability contract. Keep this synchronized with the
+  # default in hw1_ai_service/config.py so prompt-prefix caching remains useful.
+  system_prompt: >-
+    You are HardwareOne, a local offline assistant for these smart glasses,
+    replacing the cloud-backed Even AI response path. Do not claim to be Even AI
+    or an official Even Realities service. You receive text, usually a possibly
+    imperfect speech transcript, and return plain text for a small display. You
+    can answer questions, explain, brainstorm, help with writing, summarize, and
+    reason from built-in knowledge and recent conversation; that knowledge may
+    be outdated. Always reply in the same language the user wrote in.
+    You have no tools or persistent memory. You receive no camera,
+    image, or raw-audio input and cannot access the internet, live data, current
+    time or location, files, accounts, device or sensor state, or perform actions
+    beyond replying. Use information supplied in conversation without claiming
+    you observed or retrieved it. Mention limitations only when relevant. Answer
+    directly and naturally, normally in one to three concise sentences; add
+    detail when requested or needed for correctness. Avoid Markdown, headings,
+    tables, filler, and long lists. Correct only obvious transcript errors; if
+    ambiguity would change the answer, ask one brief question. Never invent
+    current facts, observations, memories, capabilities, or completed actions.
+
+deliver:
+  targets: [oled]             # oled | g2 (either or both)
+  allow_oledstart: true
+  g2_seconds: 60
+  g2_ask_render_cps: 30.0     # calibrated 2026-08-11 ask-threshold gate @ speed 40 (worst case)
+  g2_ask_render_start_margin_s: 0.6   # paint-start jitter allowance (BLE/load)
+  g2_ask_min_dwell_s: 1.2     # minimum question screen time even when fully drawn
+  g2_stream_speed: 40         # daemon-start field-only CONFIG; 0 preserves current G2 state
+
+service:
+  poll_hz: 0                  # stays 0 until the P1 hostjobs firmware lands
+  socket_path: ~/.local/run/hw1-ai-service.sock
+  ram_check: warn             # warn | strict | off — startup RAM preflight;
+                              # warn proceeds (runtime degrades to transcript-
+                              # only if llama-server keeps dying), strict refuses
+
+# Finite CM5 host power control. Install systemd/hw1-power-helper first; the
+# UART protocol contains typed operations only and never accepts a shell line.
+power:
+  enabled: false              # set true only after installing the root helper
+  helper_path: /usr/local/libexec/hw1-power-helper
+  use_sudo: true
+  initial_profile: auto       # eco | balanced | performance | auto
+  auto_active_profile: performance
+  auto_idle_profile: eco
+  auto_idle_delay_s: 30       # last AI job -> eco debounce; 0 is immediate
+  allow_suspend: false        # EXPERIMENTAL on Pi 5/CM5; also kernel-checked
+  min_sleep_minutes: 1        # firmware and helper hard-bound the range 1..1440
+  max_sleep_minutes: 1440     # RTC alarm + low-power halt, then a cold boot
+  helper_timeout_s: 20
+  uart_timeout_s: 20
+  event_queue_size: 32
+  request_cache_size: 128
+
+# Three-mode CM5 fan control. The root-owned controller has its own root-only
+# JSON configuration for the temperature->PWM curve and safety thresholds;
+# this unprivileged service only forwards auto/quiet/max/status over its fixed
+# Unix-socket protocol. Install systemd/install-fan-controller.sh first.
+fan:
+  enabled: false
+  socket_path: /run/hw1-fan-controller/control.sock
+  socket_timeout_s: 5
+  uart_timeout_s: 20
+  event_queue_size: 16
+  request_cache_size: 64

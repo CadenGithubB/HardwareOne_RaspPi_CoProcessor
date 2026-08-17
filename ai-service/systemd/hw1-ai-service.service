@@ -1,0 +1,29 @@
+# User unit: install to ~/.config/systemd/user/, then
+#   systemctl --user daemon-reload && systemctl --user enable --now hw1-ai-service
+# (loginctl enable-linger $USER so it runs without an active login.)
+
+[Unit]
+Description=hardwareone CM5 AI companion (STT + LLM over the UART link)
+
+[Service]
+Type=exec
+ExecStart=%h/hw1ai/bin/hw1-ai-service -c %h/.config/hw1-ai-service/config.yaml daemon
+# Restart unexpected clean exits as well as crashes and watchdog failures.
+# An explicit `systemctl --user stop` remains stopped.
+Restart=always
+RestartSec=5
+# The Python keep-alive runs on the main asyncio loop. A loop stall therefore
+# kills and restarts this unit's whole control group, including llama-server.
+NotifyAccess=main
+WatchdogSec=60s
+# Avoid writing a potentially large model-process core on watchdog recovery.
+WatchdogSignal=SIGKILL
+# The llama-server child is supervised by the service itself; kill the
+# whole control group on stop so it never outlives us.
+KillMode=control-group
+TimeoutStopSec=20
+# Control socket, credentials, and model prompts stay user-private.
+UMask=0077
+
+[Install]
+WantedBy=default.target

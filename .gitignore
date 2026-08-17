@@ -1,0 +1,23 @@
+# Build output — uart-baud-test/firmware is an ESP-IDF build tree (~141 MB)
+firmware/
+build/
+build-*/
+
+# Python
+.venv*/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.corpus/
+
+# Editor / tool history
+.history/
+*.kicad_prl
+*-backups/
+
+# Local artefacts
+*.log
+output/
+tmp/

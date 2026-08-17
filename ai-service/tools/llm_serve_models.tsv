@@ -1,0 +1,61 @@
+# id	repository	revision	filename	bytes	sha256
+# Pinned GGUF candidates for the llama-server latency sweep (benchmark_llm_serve.sh).
+# Byte counts and SHA-256 values are the Hugging Face LFS object ids; revisions
+# are the repository commits pinned at the same time.
+#
+# An id containing "-mtp-" tells benchmark_llm_serve.sh to run that model twice,
+# once plain and once with --spec-type draft-mtp (depth from --mtp-n-max).
+#
+# ROUND 2, informed by the 2026-08-13 sweep on the 8 GB CM5. Measured there:
+#
+#   arm                          TTFT later   decode    vs base   peak RSS
+#   Qwen3-1.7B Q4_0 (baseline)      0.82 s    9.74 t/s    100%     2336 MiB
+#   Qwen3.5-2B Q4_0 plain           1.20 s    6.85 t/s     70%     2632 MiB
+#   Qwen3.5-2B Q4_0 MTP n-max 6     1.16 s    3.36 t/s     35%     2914 MiB
+#   LFM2-8B-A1B Q4_0                0.85 s   11.05 t/s    113%     7291 MiB  (swapped)
+#   Granite-4.0-H-Tiny Q4_0         0.92 s    7.67 t/s     79%     7567 MiB  (swapped)
+#
+# Conclusions carried into this manifest:
+#   - LFM2 is the only candidate that BEAT the baseline, and it did so on decode
+#     (11.05 vs 9.74) while matching later-turn TTFT. It is the one worth saving.
+#     Its only problem is footprint, so round 2 re-tests it small enough to fit.
+#   - Granite is dropped: slower than baseline AND the largest footprint of all,
+#     because its hybrid-Mamba SSM state cost 3788 MiB on top of 3779 MiB of
+#     weights. Nothing about it is worth another 25 minutes.
+#   - Qwen3.5-2B stays only as the denominator for the MTP retry.
+#
+# Sizing rule used below. Measured overhead above weights was ~2.8 GiB for LFM2.
+# A production-viable model must leave room for resident Moonshine (~614 MiB)
+# plus the daemon and OS (~500 MiB) inside ~7900 MiB, so peak RSS must stay under
+# roughly 6500 MiB — meaning weights under about 3700 MiB.
+
+# 3506 MiB. Unsloth's dynamic quant keeps attention and embedding tensors at
+# higher precision than a uniform Q3, so it is the best quality available at a
+# size that actually fits. This is the headline candidate for round 2.
+lfm2-8b-a1b-ud-q3-k-xl	unsloth/LFM2-8B-A1B-GGUF	01c1c9ba807324289806d69f5895e11aff6de784	LFM2-8B-A1B-UD-Q3_K_XL.gguf	3676339264	d10253b60d9699c4936a024fded42cba4581dc3640182146cba95fe57c143ac6
+
+# 3812 MiB. Just over the sizing rule — included deliberately to find where the
+# cliff actually is rather than trusting the arithmetic. If this one fits, the
+# UD-Q3_K_XL row is the safe choice and this is the quality-preferred one.
+lfm2-8b-a1b-q3-k-m	unsloth/LFM2-8B-A1B-GGUF	01c1c9ba807324289806d69f5895e11aff6de784	LFM2-8B-A1B-Q3_K_M.gguf	3997613120	b39f735f86a16cb1761b7a961494fd733ebfa4d06c56fdca55e73c5419dc8ea7
+
+# Kept from round 1 (already downloaded, costs no bandwidth) purely so the MTP
+# retry at a shallower draft depth has its plain arm to be measured against.
+qwen3.5-2b-mtp-q4_0	unsloth/Qwen3.5-2B-MTP-GGUF	e05864f8066d874d5f85aaff007ae57a2a7d1efe	Qwen3.5-2B-Q4_0.gguf	1256787360	5865aef7b9983e463901ad0683c7f11cde89c86420d239c7fb5f051ded7b070e
+
+# --- round 1 rows, retained for reference ---
+#
+# The Q4_0 that produced the 11.05 t/s result. Re-enable to reproduce it, but it
+# does not fit alongside STT in production.
+#lfm2-8b-a1b-q4_0	LiquidAI/LFM2-8B-A1B-GGUF	145e98524a2ed11d35a45e0080febcee063749b6	LFM2-8B-A1B-Q4_0.gguf	4733893312	63cd0f1be2f595293550d8dd5772782f211964d2979ad6113d7d32adafa9f785
+#
+# Dropped: 79% of baseline decode and the worst footprint measured.
+#granite-4.0-h-tiny-q4_0	ibm-granite/granite-4.0-h-tiny-GGUF	08d5a8a9741dd5c1a95d2d39e25253226aa1464e	granite-4.0-h-tiny-Q4_0.gguf	3962938208	85c1f5484c7974a06d33642779ed633b144d7cfa0b498a64e35d08a7116882ef
+#
+# 2976 MiB. The fallback if both Q3 rows still swap. Expect real quality loss —
+# an MoE routes only ~1B active parameters per token, so each surviving weight
+# carries more of the answer than in a dense model of the same total size.
+#lfm2-8b-a1b-ud-q2-k-xl	unsloth/LFM2-8B-A1B-GGUF	01c1c9ba807324289806d69f5895e11aff6de784	LFM2-8B-A1B-UD-Q2_K_XL.gguf	3120266304	6b487f7f2055ac1b1e8fdfe36812854c6778d1914899853535624784fd629e1b
+#
+# Reasoning-tuned, emits chain of thought with no documented off switch.
+#lfm2.5-8b-a1b-q4_0	LiquidAI/LFM2.5-8B-A1B-GGUF	dfd5fdcad7a1c0d31473fb4ca443b8befbacddf0	LFM2.5-8B-A1B-Q4_0.gguf	4844678368	48ed1465d761311b2fd57b7fb46cf969a20b3a8281945b04e10f52bd1609e715
