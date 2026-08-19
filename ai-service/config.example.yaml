@@ -24,7 +24,7 @@ audio:
                               # truncates people mid-sentence. Trim the file instead:
   vad_trim: true              # drop the recorded trailing silence WITHOUT shortening
                               # the detection window (~38% of a capture is silence).
-                              # false = byte-exact WAV for tools/vad_replay.py.
+                              # false = byte-exact WAV for tools/stt/vad_replay.py.
   vad_max_seconds: 15.0       # host wait/backstop; matching native cancel/discard exits early
                               # (device also has its separate 60s recording cap)
   vad_poll_s: 0.25            # how often the Pi asks the device "still recording?"

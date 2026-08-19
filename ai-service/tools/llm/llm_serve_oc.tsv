@@ -2,7 +2,7 @@
 # Overclock A/B manifest: the shipping candidate only, so each rung of the
 # ladder costs ~12 minutes instead of ~30.
 #
-#   ./tools/benchmark_llm_serve.sh --serve-only --strict-power --manifest tools/llm_serve_oc.tsv
+#   ./tools/llm/benchmark_llm_serve.sh --serve-only --strict-power --manifest tools/llm/llm_serve_oc.tsv
 #
 # Every run measures the active baseline first and last to expose within-run
 # drift. To quantify an overclock, compare each model's absolute metrics against

@@ -7,8 +7,8 @@ set -Eeuo pipefail
 CM5_HOME="${HOME:?HOME must name the service account home}"
 PY="$CM5_HOME/hw1ai/bin/python"
 ROOT="$CM5_HOME/hw1-ai-service"
-PROBE="$ROOT/tools/live_pcm_shadow_probe.py"
-G2_PROBE="$ROOT/tools/g2_evenai_probe.py"
+PROBE="$ROOT/tools/link/live_pcm_shadow_probe.py"
+G2_PROBE="$ROOT/tools/link/g2_evenai_probe.py"
 CFG="$CM5_HOME/.config/hw1-ai-service/config.yaml"
 MODEL="$CM5_HOME/.cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized_26_07_30"
 POWER_HELPER=/usr/local/libexec/hw1-power-helper
