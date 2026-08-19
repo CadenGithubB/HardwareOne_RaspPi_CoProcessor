@@ -3,7 +3,7 @@
 
 link:
   port: /dev/ttyAMA2          # Pi 5 bench and CM5 carrier are identical
-  baud: 2000000               # divider-exact on both ends; must match the XIAO's
+  baud: 2000000               # divider-exact on both ends; must match the ESP32's
                               # uartLinkBaud / UART_LINK_BAUD_DEFAULT exactly.
                               # Overruns surface as voicefetch CRC/COBS errors,
                               # not silent corruption — no HW flow control wired.
@@ -11,7 +11,7 @@ link:
 
 audio:
   record_seconds: 4.0         # fixed capture window used only when vad: false
-  # Silence endpointing: the XIAO ends the recording on trailing silence, so
+  # Silence endpointing: the ESP32 ends the recording on trailing silence, so
   # short questions don't wait out a full fixed window. Opt-in on the device
   # too (only this STT flow arms it); pre-VAD firmware falls back to the fixed
   # window automatically.
@@ -72,7 +72,7 @@ llm:
   # important, 6 or 4 is a reversible latency/context tradeoff to benchmark
   # after verifying llama-server's actual prompt-cache reuse.
   history_turns: 8
-  # Publish this host's GGUF catalog into the XIAO's LLM model registry and
+  # Publish this host's GGUF catalog into the ESP32's LLM model registry and
   # serve its `llm_ask` generations, so every surface (web, OLED, G2, BLE, CLI)
   # offers `cm5:<model>` beside the on-device engine. Costs one command per
   # model at link-up and nothing while idle. See ARCHITECTURE.md 3 / cm5_llm.py.

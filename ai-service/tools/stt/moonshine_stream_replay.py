@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay XIAO PCM through Moonshine's streaming API at capture speed.
+"""Replay ESP32 PCM through Moonshine's streaming API at capture speed.
 
 This is a measurement tool, not a production STT path.  It deliberately
 models the concurrency boundary required by live UART audio:
@@ -13,7 +13,7 @@ small queue; JSON serialization and metric work happen after the native call
 returns.  A queue overflow is reported as a failed case instead of silently
 blocking or dropping audio.
 
-The XIAO recorder emits 4096-byte PCM16 chunks (2048 samples, 128 ms at
+The ESP32 recorder emits 4096-byte PCM16 chunks (2048 samples, 128 ms at
 16 kHz).  By default the first chunk is delivered after its 128 ms capture
 period, just as live transport would deliver it.  Each case emits JSONL event
 records followed by one ``case_summary`` record.  Optional batch decoding is
@@ -126,7 +126,7 @@ class _TextSnapshot:
 
 
 def read_xiao_wav(path: str | os.PathLike[str]) -> WavData:
-    """Read and validate the mono PCM16/16-kHz shape used by the XIAO."""
+    """Read and validate the mono PCM16/16-kHz shape used by the ESP32."""
     wav_path = Path(path).expanduser().resolve()
     try:
         with wave.open(str(wav_path), "rb") as source:

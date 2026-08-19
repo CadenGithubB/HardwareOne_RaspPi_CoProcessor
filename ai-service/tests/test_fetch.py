@@ -294,7 +294,7 @@ def test_stopped_poll_grace_rechecks_event_fired_inside_poll():
 
 
 def test_stopping_and_finalizing_statuses_are_not_treated_as_stopped():
-    """The XIAO now remains busy until the WAV is closed and reports its
+    """The ESP32 now remains busy until the WAV is closed and reports its
     intermediate FSM states. Neither state is permission to fetch the file or
     start the wake-only post-stop grace window."""
     async def main():

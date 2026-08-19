@@ -1,4 +1,4 @@
-"""Answer delivery: render CM5 text on the XIAO's display surfaces.
+"""Answer delivery: render CM5 text on the ESP32's display surfaces.
 
 P0 targets the two commands that exist today (plan §Gap C0). Review-
 corrected realities baked in here:

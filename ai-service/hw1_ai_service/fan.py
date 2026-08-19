@@ -1,6 +1,6 @@
 """Finite CM5 fan control driven by authenticated HardwareOne EVT frames.
 
-The XIAO selects one of three product modes; it never supplies a path, shell
+The ESP32 selects one of three product modes; it never supplies a path, shell
 fragment, PWM value, or temperature threshold.  A separately installed,
 root-owned fan controller owns sysfs discovery, the temperature curve, and all
 safety overrides.  This module is only the unprivileged UART/socket bridge.
@@ -263,7 +263,7 @@ def _parse_service_result(obj) -> FanServiceResult:
 
     # Firmware represents an unavailable sensor as -1 and otherwise accepts a
     # non-negative temperature. Keep the root-service contract aligned so a
-    # locally accepted reply cannot later be rejected by the XIAO callback.
+    # locally accepted reply cannot later be rejected by the ESP32 callback.
     temp_mc = _bounded_optional_int(obj, "temp_mc", 0, 150000)
     target_pwm = _bounded_int(obj, "target_pwm", 0, 255)
     pwm = _bounded_int(obj, "pwm", 0, 255)

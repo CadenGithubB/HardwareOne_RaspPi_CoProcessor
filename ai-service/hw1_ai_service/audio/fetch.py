@@ -1,4 +1,4 @@
-"""A0 audio fetch: record on the XIAO, pull the WAV over the command channel.
+"""A0 audio fetch: record on the ESP32, pull the WAV over the command channel.
 
 Sequence (all replies verified against the firmware source, see
 ARCHITECTURE.md §4):
@@ -62,7 +62,7 @@ _FALLBACK_PATH_RE = re.compile(r"(/\S+\.wav)")
 # pushed mic_autostop. A status poll could therefore win by a few milliseconds
 # and make the wake path send a redundant stop just to recover the filename.
 # Current firmware reports STOPPING/FINALIZING until close and publishes IDLE
-# last, so this grace is now backward-compatibility coverage for older XIAOs.
+# last, so this grace is now backward-compatibility coverage for older ESP32s.
 # The EVT remains unacknowledged and the explicit-stop fallback authoritative.
 _WAKE_STOPPED_EVT_GRACE_S = 0.25
 # Owner cleanup is best-effort and idempotent.  It must not inherit the generic

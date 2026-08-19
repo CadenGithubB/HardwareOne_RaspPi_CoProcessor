@@ -58,7 +58,7 @@ _STREAM_FLUSH_CHARS = 140
 _SENTENCE_ENDS = (". ", "! ", "? ")
 
 # Probation after the device reboots under us: the CM5 stays off the link
-# while the XIAO settles (OTA plan).
+# while the ESP32 settles (OTA plan).
 _REBOOT_QUIESCE_S = 30.0
 # How long a wake stays worth answering, measured from arrival to the START of
 # dispatch (not to completion — a slow exchange is still a wanted one). Normal
@@ -1083,7 +1083,7 @@ class VoicePipeline:
     async def _dispatch(self, job: Job, source: JobSource) -> None:
         presence_recovering = False
         if self._session.reboot_suspected:
-            # ROM-burst garbage was seen mid-run: the XIAO rebooted under us.
+            # ROM-burst garbage was seen mid-run: the ESP32 rebooted under us.
             # Respect OTA probation (plan: CM5 stays idle during probation)
             # before touching it, then let command() re-login lazily. Unlike
             # the startup path there is no idle window to hide this in, so

@@ -210,7 +210,7 @@ print("ControlSocket=responsive")
 PY
           echo "JournalReadiness=unavailable"
           echo "HOST CONTROL PLANE GREEN"
-          echo "APPLICATION READINESS REQUIRES: run 'cm5 status' twice from another authenticated XIAO interface"
+          echo "APPLICATION READINESS REQUIRES: run 'cm5 status' twice from another authenticated ESP32 interface"
         fi
         echo "POST-DEPLOY HOST CHECKS GREEN"
     '

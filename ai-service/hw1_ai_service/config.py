@@ -56,7 +56,7 @@ class LinkConfig:
 class AudioConfig:
     record_seconds: float = 4.0        # fixed window when vad is off (no endpointing)
     # Silence endpointing (device-side VAD). When on, the CM5 issues
-    # `micrecord start vad <vad_silence_ms>`: the XIAO auto-stops the recording
+    # `micrecord start vad <vad_silence_ms>`: the ESP32 auto-stops the recording
     # after that much trailing silence, and the CM5 polls `micrecord` until it
     # stops (or vad_max_seconds elapses) instead of sleeping a fixed window.
     # This is opt-in ON THE DEVICE too — only the STT flow's `start vad`
@@ -77,7 +77,7 @@ class AudioConfig:
     # Ask HIGH per fileread: the firmware clamps each reply to its own
     # rawCap (~2.9KB) — requesting 4096 yields max-size chunks and ~30%
     # fewer round trips than the old 2048 (each round trip costs a full
-    # XIAO loop lap, which is the real bottleneck).
+    # ESP32 loop lap, which is the real bottleneck).
     chunk_request_bytes: int = 4096
     # Every fetched utterance is saved here for playback/diagnosis ("" = off):
     # distinguishes "mic heard nothing" from "STT failed".

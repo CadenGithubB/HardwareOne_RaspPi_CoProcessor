@@ -2,13 +2,13 @@
 """No-camera diagnostics for the native G2 EvenAI display path.
 
 Run this with the same Python environment as ``hw1-ai-service`` after stopping
-the daemon so this process has exclusive ownership of the XIAO UART.  The
+the daemon so this process has exclusive ownership of the ESP32 UART.  The
 probe does not modify the service pipeline or firmware.  An explicit CONFIG
-speed changes the glasses' runtime value, and ``render-ab`` uses the XIAO
+speed changes the glasses' runtime value, and ``render-ab`` uses the ESP32
 system logger (whose normal behavior remembers its most recent log path).
 
 The human-observation tests use a wearer complete/cut report.  The render A/B
-also records the glasses' protocol-level STREAM_COMPLETE event in a XIAO log,
+also records the glasses' protocol-level STREAM_COMPLETE event in a ESP32 log,
 so it does not require a camera or a screen recording.
 
 All built-in native-session actions resolve the active firmware-issued
@@ -346,7 +346,7 @@ async def send(
     expect: str = "status",
     required: bool = True,
 ):
-    """Send one command and print its Pi-to-XIAO command interval."""
+    """Send one command and print its Pi-to-ESP32 command interval."""
     print(f"[{ts()}] > {line}", flush=True)
     reply = await session.command(line, expect=expect, timeout=20, replay=False)
     print(f"[{ts()}] < {reply.text}", flush=True)
@@ -417,7 +417,7 @@ async def maybe_set_speed(session: Session, speed: str) -> None:
 
 
 async def trial(session: Session, args: argparse.Namespace) -> None:
-    """Run the original partial-ASK trial with an XIAO-OK-based delay."""
+    """Run the original partial-ASK trial with an ESP32-OK-based delay."""
     await reconnect_g2(session)
     await maybe_set_speed(session, args.speed)
     exchange_id: str | None = None
@@ -443,18 +443,18 @@ async def trial(session: Session, args: argparse.Namespace) -> None:
             await send(session, f"g2evenai askid {exchange_id} {text}")
             final_ask_ok = loop.time()
             print(
-                f"ASK {index + 1} XIAO command OK +{final_ask_ok-start:.3f}s",
+                f"ASK {index + 1} ESP32 command OK +{final_ask_ok-start:.3f}s",
                 flush=True,
             )
 
-        # This anchor is later than command start but is still only the XIAO's
+        # This anchor is later than command start but is still only the ESP32's
         # command result.  It is not a G2 receipt or optical-render event; the
         # protocol log must be used to recover the native ASK echo separately.
         target = final_ask_ok + args.reply_delay_ms / 1000.0
         await asyncio.sleep(max(0.0, target - loop.time()))
         actual_ms = (loop.time() - final_ask_ok) * 1000.0
         print(
-            f"REPLY command start {actual_ms:.1f}ms after final ASK XIAO command OK",
+            f"REPLY command start {actual_ms:.1f}ms after final ASK ESP32 command OK",
             flush=True,
         )
         await send(session, f"g2evenai replyid {exchange_id} Probe complete")
@@ -486,7 +486,7 @@ async def ask_threshold(session: Session, args: argparse.Namespace) -> None:
 
             print(
                 f"TRIAL {index}/{len(args.delays_ms)}: {len(question)} chars, "
-                f"reply after ASK XIAO command OK + {delay_ms} ms",
+                f"reply after ASK ESP32 command OK + {delay_ms} ms",
                 flush=True,
             )
             await send(session, f"g2evenai askid {exchange_id} {question}")
@@ -495,7 +495,7 @@ async def ask_threshold(session: Session, args: argparse.Namespace) -> None:
             await asyncio.sleep(max(0.0, target - loop.time()))
             actual_ms = (loop.time() - ask_ok) * 1000.0
             print(
-                f"REPLY start {actual_ms:.1f}ms after ASK XIAO command OK",
+                f"REPLY start {actual_ms:.1f}ms after ASK ESP32 command OK",
                 flush=True,
             )
             await send(
@@ -536,7 +536,7 @@ def _print_threshold_results(
 ) -> None:
     print(
         "\nASK threshold results "
-        "(all delays start at ASK XIAO command OK, not G2 receipt):",
+        "(all delays start at ASK ESP32 command OK, not G2 receipt):",
         flush=True,
     )
     print(f"  question: {len(question)} chars / {len(question.encode('utf-8'))} bytes")
@@ -568,7 +568,7 @@ async def start_protocol_log(session: Session, requested_path: str) -> tuple[str
     level = await send(session, "loglevel", expect="auto")
     if "debug (3)" not in level.text.lower():
         raise RuntimeError(
-            "XIAO loglevel is not debug (3), so STREAM_COMPLETE evidence may be "
+            "ESP32 loglevel is not debug (3), so STREAM_COMPLETE evidence may be "
             "suppressed; set and later restore loglevel explicitly before this test"
         )
     active = "System logging ACTIVE" in status.text
@@ -576,7 +576,7 @@ async def start_protocol_log(session: Session, requested_path: str) -> tuple[str
         match = _ACTIVE_LOG_RE.search(status.text)
         path = match.group(1) if match else "(unknown path)"
         raise RuntimeError(
-            f"XIAO system logging is already active at {path}. Stop or finish that "
+            f"ESP32 system logging is already active at {path}. Stop or finish that "
             "capture before render-ab. Reusing it would mix old trials into this A/B, "
             "and fetching an open log can miss the logger's unflushed tail."
         )
@@ -614,11 +614,11 @@ async def stop_protocol_log(session: Session, owns_log: bool) -> bool:
     try:
         stopped = await send(session, "log stop", expect="auto", required=False)
     except Exception as exc:
-        print(f"ERROR: XIAO log stop raised {exc!r}", flush=True)
+        print(f"ERROR: ESP32 log stop raised {exc!r}", flush=True)
         return False
     if not stopped.ok:
         print(
-            "ERROR: XIAO log stop failed. The log may still be open or have an "
+            "ERROR: ESP32 log stop failed. The log may still be open or have an "
             "unflushed tail; it must not be analyzed as complete evidence.",
             flush=True,
         )
@@ -657,7 +657,7 @@ async def fetch_file(session: Session, device_path: str, output: Path) -> int:
 
 def print_protocol_markers(output: Path) -> dict[str, int]:
     """Print a small evidence excerpt; retain the full fetched log on disk."""
-    print("\nProtocol markers from fetched XIAO log:", flush=True)
+    print("\nProtocol markers from fetched ESP32 log:", flush=True)
     found = 0
     counts = {marker: 0 for marker in _PROTOCOL_MARKERS}
     with output.expanduser().open("r", encoding="utf-8", errors="replace") as handle:
@@ -1192,8 +1192,8 @@ async def render_ab(session: Session, args: argparse.Namespace) -> None:
                 reply_ok = loop.time()
                 print(
                     f"{variant} submission: start "
-                    f"+{(reply_start-ask_ok)*1000.0:.1f} ms after ASK XIAO command OK; "
-                    f"final XIAO command OK took "
+                    f"+{(reply_start-ask_ok)*1000.0:.1f} ms after ASK ESP32 command OK; "
+                    f"final ESP32 command OK took "
                     f"{(reply_ok-reply_start)*1000.0:.1f} ms",
                     flush=True,
                 )
@@ -1408,8 +1408,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="No-camera G2 EvenAI timing and protocol diagnostics.",
         epilog=(
             "Stop hw1-ai-service before running this tool; both processes cannot "
-            "own the XIAO UART at once. Delays reported by trial and ask-threshold "
-            "start after the ASK XIAO command result (not a G2 receipt)."
+            "own the ESP32 UART at once. Delays reported by trial and ask-threshold "
+            "start after the ASK ESP32 command result (not a G2 receipt)."
         ),
     )
     parser.add_argument("--config", default="~/.config/hw1-ai-service/config.yaml")
@@ -1427,14 +1427,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     threshold_parser = sub.add_parser(
         "ask-threshold",
-        help="wearer complete/cut trials for an XIAO-OK-based ASK grace window",
+        help="wearer complete/cut trials for an ESP32-OK-based ASK grace window",
     )
     threshold_parser.add_argument(
         "--delays-ms",
         type=parse_delays,
         default=parse_delays("2000,2500,3000,3500,4000"),
         metavar="LIST",
-        help="comma-separated XIAO-command-OK-to-REPLY delays (default: %(default)s)",
+        help="comma-separated ESP32-command-OK-to-REPLY delays (default: %(default)s)",
     )
     threshold_parser.add_argument("--question", default=DEFAULT_THRESHOLD_QUESTION)
     threshold_parser.add_argument("--reply-text", default="Probe complete")
@@ -1458,7 +1458,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     render_parser.add_argument(
         "--device-log",
-        help="XIAO log path; default is a timestamped /logging_captures/system file",
+        help="ESP32 log path; default is a timestamped /logging_captures/system file",
     )
     render_parser.add_argument(
         "--output",
@@ -1482,7 +1482,7 @@ def build_parser() -> argparse.ArgumentParser:
     speed_parser.add_argument("--render-wait-ms", type=int, default=3500)
     speed_parser.add_argument(
         "--device-log",
-        help="XIAO log path; default is a timestamped /logging_captures/system file",
+        help="ESP32 log path; default is a timestamped /logging_captures/system file",
     )
     speed_parser.add_argument(
         "--output",
@@ -1497,7 +1497,7 @@ def build_parser() -> argparse.ArgumentParser:
     command_parser = sub.add_parser("cmd", help="send one or more raw firmware commands")
     command_parser.add_argument("lines", nargs="+")
 
-    fetch_parser = sub.add_parser("fetch", help="fetch a file from the XIAO")
+    fetch_parser = sub.add_parser("fetch", help="fetch a file from the ESP32")
     fetch_parser.add_argument("path")
     fetch_parser.add_argument("output")
     return parser

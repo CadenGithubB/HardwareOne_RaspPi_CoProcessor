@@ -11,14 +11,14 @@ TTYB_DEFAULT_MEM_LIMIT, not userspace-tunable — bytes vanish silently.
 TX is small (commands <= 2047B) and goes through a single write path; the
 Session layer's command lock provides the single-writer discipline.
 
-Garbage is normal, not exceptional: every XIAO reset sprays the ROM boot
+Garbage is normal, not exceptional: every ESP32 reset sprays the ROM boot
 banner at 115200 into our 921600 reader (decodes as trash), and a mid-line
 connect starts with a partial line. Bad decode -> a "garbage" event (the
 session uses a burst of them as a reboot hint); alignment restores itself
 at the next newline — the same recovery story the firmware uses.
 
 Review-hardened properties:
-  - rx queue is BOUNDED (drop-oldest): an unpowered XIAO flooding break
+  - rx queue is BOUNDED (drop-oldest): an unpowered ESP32 flooding break
     noise overnight must not OOM a Pi that also hosts the LLM.
   - garbage events are rate-limited to one per window (the count still
     tracks every incident) — the session only needs "garbage happened",
