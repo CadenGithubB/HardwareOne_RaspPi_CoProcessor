@@ -21,10 +21,11 @@ default-off native live-STT shadow worker is implemented next, but its physical
 real-G2 run, full Gate 0A, production streaming STT, and revisioned partial
 questions remain pending.
 
-This plan supersedes the live-STT / G2 question-display assumptions in
-`CM5_AI_SERVICE_PLAN.md` and `investigation/findings_sttResearch.md`. Those
-documents remain useful background, but their latency estimates and Moonshine
-endpointing claims predate the current source and this review.
+This plan supersedes the live-STT / G2 question-display assumptions in the
+earlier system plan and STT research notes (kept locally, not tracked). Their
+latency estimates and Moonshine endpointing claims predate the current source
+and this review. For re-running that research on different hardware, see
+[`docs/investigations/stt-benchmark.md`](docs/investigations/stt-benchmark.md).
 
 ## Objective and fixed constraints
 
@@ -369,8 +370,9 @@ gate is a long indexed question at speed 40. ASK has no known
 `STREAM_COMPLETE`, and this reversal used only `Ready.` with a fixed wait, so
 answer timing must not be reused as a question barrier without that test. A
 power-cycle/no-CONFIG baseline remains an optional default/persistence
-experiment. Full trial tables are in
-[`G2_EVENAI_RENDER_TEST_RECORD.md`](G2_EVENAI_RENDER_TEST_RECORD.md).
+experiment. Full trial tables are in the local render test record; the
+procedure for regenerating them is
+[`docs/investigations/render-timing.md`](docs/investigations/render-timing.md).
 
 ## Phase 1 - capture and session correctness (implemented; hardware regression test pending)
 

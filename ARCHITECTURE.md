@@ -24,9 +24,12 @@ Deployment has one canonical source tree and virtual environment; see
 [`CM5_DEPLOYMENT_PATHS.md`](CM5_DEPLOYMENT_PATHS.md) before syncing, installing,
 or benchmarking the service.
 
-This document is the program-level design. The system-level plan (why UART,
-firmware gaps, phasing, decisions) is CM5_AI_SERVICE_PLAN.md; the audit
-that hardened it is CM5_AI_SERVICE_AUDIT.md. Code lives in `ai-service/`.
+This document is the program-level design. The system-level plan that preceded
+it (why UART, firmware gaps, phasing, decisions) and the adversarial audit that
+hardened it were session records for one specific rig; they are kept locally
+rather than tracked here. The reusable procedures distilled from that work are
+in [`docs/investigations/`](docs/investigations/README.md). Code lives in
+`ai-service/`.
 
 Historical scope note: everything below targets **P0 — the walking skeleton** that runs
 against today's firmware with zero firmware changes, but every module is

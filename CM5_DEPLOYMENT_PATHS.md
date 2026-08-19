@@ -1,7 +1,7 @@
 # CM5 deployment paths and sync workflow
 
 This is the canonical path record for the `hw1-ai-service` deployment on the
-`xiaocm5` carrier CM5. Use these paths in commands, diagnostics, benchmarks, and
+carrier CM5 named by `$CM5_HOST`. Use these paths in commands, diagnostics, benchmarks, and
 future documentation. Do not create a second service source tree.
 
 ## Environment
@@ -10,7 +10,7 @@ Commands and paths in this repo's docs use these variables so nobody's host,
 account or checkout location is baked into the text. Set them once per shell:
 
 ```bash
-export CM5_HOST=<ip-or-hostname-of-your-cm5>   # e.g. xiaocm5
+export CM5_HOST=<ip-or-hostname-of-your-cm5>
 export CM5_USER=<ssh-user-on-the-cm5>
 export REPO_ROOT=<path-to-this-repo>           # HardwareOne_RaspPi_CoProcessor
 export FIRMWARE_ROOT=<path-to-the-firmware-repo>
@@ -25,23 +25,23 @@ directory. Remote paths are written `/home/$CM5_USER/...`.
 | --- | --- |
 | Mac repository root | `$FIRMWARE_ROOT` |
 | Mac AI-service source | `$REPO_ROOT/ai-service` |
-| CM5 SSH target | `cm5@xiaocm5` (`$CM5_HOST` currently) |
-| CM5 AI-service source | `/home/cm5/hw1-ai-service` |
-| CM5 Python environment | `/home/cm5/hw1ai` |
-| Service executable | `/home/cm5/hw1ai/bin/hw1-ai-service` |
-| Service config | `/home/cm5/.config/hw1-ai-service/config.yaml` |
-| UART credentials | `/home/cm5/.config/hw1-ai-service/credentials` |
-| User systemd unit | `/home/cm5/.config/systemd/user/hw1-ai-service.service` |
-| Runtime socket | `/home/cm5/.local/run/hw1-ai-service.sock` |
-| Last captured utterance | `/home/cm5/.cache/hw1-ai-service/last-utterance.wav` |
-| LLM models | `/home/cm5/models` |
-| llama.cpp checkout | `/home/cm5/llama.cpp` |
+| CM5 SSH target | `$CM5_USER@$CM5_HOST` (`$CM5_HOST` currently) |
+| CM5 AI-service source | `/home/$CM5_USER/hw1-ai-service` |
+| CM5 Python environment | `/home/$CM5_USER/hw1ai` |
+| Service executable | `/home/$CM5_USER/hw1ai/bin/hw1-ai-service` |
+| Service config | `/home/$CM5_USER/.config/hw1-ai-service/config.yaml` |
+| UART credentials | `/home/$CM5_USER/.config/hw1-ai-service/credentials` |
+| User systemd unit | `/home/$CM5_USER/.config/systemd/user/hw1-ai-service.service` |
+| Runtime socket | `/home/$CM5_USER/.local/run/hw1-ai-service.sock` |
+| Last captured utterance | `/home/$CM5_USER/.cache/hw1-ai-service/last-utterance.wav` |
+| LLM models | `/home/$CM5_USER/models` |
+| llama.cpp checkout | `/home/$CM5_USER/llama.cpp` |
 | XIAO UART | `/dev/ttyAMA2` at 2,000,000 baud |
 
-`/home/cm5/hw1ai` is a virtual environment, not another source checkout.
-The only current CM5 source directory is `/home/cm5/hw1-ai-service`.
+`/home/$CM5_USER/hw1ai` is a virtual environment, not another source checkout.
+The only current CM5 source directory is `/home/$CM5_USER/hw1-ai-service`.
 
-`cm5/deploy_cm5.sh` defaults to `cm5@xiaocm5`, so normal DHCP address changes
+`cm5/deploy_cm5.sh` defaults to `$CM5_USER@$CM5_HOST`, so normal DHCP address changes
 need no repository edit. Override the host or account for one invocation with
 `CM5_HOST=$CM5_HOST` or `CM5_USER=another-user` if needed.
 After a sync has already completed, `cm5/deploy_cm5.sh --verify-only` reruns
@@ -57,12 +57,12 @@ tree is installed. The current deployment must independently verify that
 > **Current-versus-historical path rule:** commands in the installation and
 > lifecycle sections immediately below use the current `cm5` account. Later
 > physical-test records retain `/home/$CM5_USER` when they describe an already-run
-> Pi 5 experiment; do not paste those historical absolute paths on `xiaocm5`.
+> Pi 5 experiment; do not paste those historical absolute paths on the CM5.
 
 ## Known stale path
 
 The old Pi 5 paths under `/home/$CM5_USER` are historical and are not valid on the
-current `cm5` account. If an obsolete `/home/cm5/ai-service` copy exists, do
+current `cm5` account. If an obsolete `/home/$CM5_USER/ai-service` copy exists, do
 not `cd` into it, run Python from it, sync into it, or include it in evidence
 bundles. Python puts
 the current directory first on `sys.path`, so running a benchmark there can
@@ -91,7 +91,7 @@ rsync -av --itemize-changes \
   --exclude '__pycache__/' \
   --exclude '*.pyc' \
   $REPO_ROOT/ai-service/ \
-  cm5@xiaocm5:hw1-ai-service/
+  $CM5_USER@$CM5_HOST:hw1-ai-service/
 ```
 
 The trailing slashes are intentional: they sync the contents of the one Mac
@@ -122,13 +122,13 @@ rsync -avni --itemize-changes \
   ./config.example.yaml \
   ./tests/test_system_prompt.py \
   ./README.md \
-  cm5@xiaocm5:hw1-ai-service/
+  $CM5_USER@$CM5_HOST:hw1-ai-service/
 ```
 
 Then stop the service and back up its active configuration on the Pi:
 
 ```bash
-ssh cm5@xiaocm5
+ssh $CM5_USER@$CM5_HOST
 
 PROMPT_STAMP="$(date +%Y%m%d-%H%M%S)"
 PROMPT_BACKUP="$HOME/deploy-backups/prompt-${PROMPT_STAMP}"
@@ -154,7 +154,7 @@ rsync -av --itemize-changes \
   ./config.example.yaml \
   ./tests/test_system_prompt.py \
   ./README.md \
-  cm5@xiaocm5:hw1-ai-service/
+  $CM5_USER@$CM5_HOST:hw1-ai-service/
 ```
 
 Finally, remove the existing `llm.system_prompt` key from the active YAML to
@@ -163,7 +163,7 @@ matches `config.example.yaml`. Validate the exact effective prompt without
 opening the UART or loading models, then start the service:
 
 ```bash
-ssh cm5@xiaocm5
+ssh $CM5_USER@$CM5_HOST
 ${EDITOR:-nano} "$HOME/.config/hw1-ai-service/config.yaml"
 chmod 0600 "$HOME/.config/hw1-ai-service/config.yaml"
 
@@ -229,7 +229,7 @@ incremental build if source changed. Do not run `fullclean`, `erase-flash`, or
 Stop the CM5 daemon and prove it released the UART:
 
 ```bash
-ssh cm5@xiaocm5
+ssh $CM5_USER@$CM5_HOST
 
 systemctl --user stop hw1-ai-service.service
 systemctl --user is-active hw1-ai-service.service
@@ -247,7 +247,7 @@ rsync -av --itemize-changes \
   --exclude '__pycache__/' \
   --exclude '*.pyc' \
   $REPO_ROOT/ai-service/ \
-  cm5@xiaocm5:hw1-ai-service/
+  $CM5_USER@$CM5_HOST:hw1-ai-service/
 ```
 
 Flash the XIAO from the Mac. Substitute the exact port printed by the first
@@ -276,7 +276,7 @@ terminal, start only the canonical service and verify its import path and
 exchange capability:
 
 ```bash
-ssh cm5@xiaocm5
+ssh $CM5_USER@$CM5_HOST
 
 systemctl --user start hw1-ai-service.service
 systemctl --user is-active hw1-ai-service.service
@@ -377,7 +377,7 @@ test -n "$CANCEL_PULL_DIR"
 mkdir -p "$CANCEL_PULL_DIR/cm5"
 
 rsync -avL \
-  cm5@xiaocm5:g2-prefx/evenai-cancel-latest/ \
+  $CM5_USER@$CM5_HOST:g2-prefx/evenai-cancel-latest/ \
   "$CANCEL_PULL_DIR/cm5/"
 
 find "$CANCEL_PULL_DIR" -maxdepth 2 -type f -print
@@ -572,8 +572,11 @@ diagnostic log that no longer needs to remain active:
   cmd 'log stop'
 ```
 
-The initial baseline is complete; its stable IDs and numbers are in
-[`G2_EVENAI_RENDER_TEST_RECORD.md`](G2_EVENAI_RENDER_TEST_RECORD.md). Before
+The initial baseline is complete; its stable IDs and numbers were recorded for
+one specific firmware/glasses pair and are kept locally. To take the equivalent
+baseline on your own hardware, follow
+[`docs/investigations/render-timing.md`](docs/investigations/render-timing.md).
+Before
 rerunning it, isolate the CONFIG regression with the field-only no-camera
 80/40/80 matrix:
 
@@ -943,7 +946,7 @@ and refuses to continue if another process still owns the UART:
 ```bash
 cd $FIRMWARE_ROOT
 
-ssh cm5@xiaocm5 '
+ssh $CM5_USER@$CM5_HOST '
 set -eu
 systemctl --user stop hw1-ai-service.service
 sleep 2
@@ -960,9 +963,9 @@ rsync -av --itemize-changes \
   --exclude '__pycache__/' \
   --exclude '*.pyc' \
   $REPO_ROOT/ai-service/ \
-  cm5@xiaocm5:hw1-ai-service/
+  $CM5_USER@$CM5_HOST:hw1-ai-service/
 
-ssh cm5@xiaocm5
+ssh $CM5_USER@$CM5_HOST
 ```
 
 ### 2. Run on the Pi and perform the one human action
@@ -1226,7 +1229,7 @@ cd $FIRMWARE_ROOT
 REPO=$FIRMWARE_ROOT
 mkdir -p "$REPO/.scratch"
 
-NATIVE_REMOTE="$(ssh cm5@xiaocm5 '
+NATIVE_REMOTE="$(ssh $CM5_USER@$CM5_HOST '
   path=$(cat "$HOME/g2-prefx/native-shadow-latest.txt")
   case "$path" in
     "$HOME"/g2-prefx/native-shadow-*) printf "%s\n" "${path#"$HOME"/}" ;;
@@ -1240,7 +1243,7 @@ esac
 
 NATIVE_LOCAL="$(mktemp -d "$REPO/.scratch/native-shadow-XXXXXXXX")"
 rsync -av \
-  "cm5@xiaocm5:${NATIVE_REMOTE}/" \
+  "$CM5_USER@$CM5_HOST:${NATIVE_REMOTE}/" \
   "$NATIVE_LOCAL/"
 
 ln -sfn "$NATIVE_LOCAL" "$REPO/.scratch/native-shadow-latest"
@@ -1708,11 +1711,11 @@ mkdir -p \
   $FIRMWARE_ROOT/.scratch/cm5-diagnostics
 
 rsync -av \
-  cm5@xiaocm5:g2-prefx/ \
+  $CM5_USER@$CM5_HOST:g2-prefx/ \
   $FIRMWARE_ROOT/.scratch/cm5-diagnostics/g2-prefx/
 
 rsync -av \
-  cm5@xiaocm5:stt-results/ \
+  $CM5_USER@$CM5_HOST:stt-results/ \
   $FIRMWARE_ROOT/.scratch/cm5-diagnostics/stt-results/
 ```
 
@@ -1729,7 +1732,7 @@ rsync -av \
   --include='evenai-speed-ab-*.log' \
   --include='speed-ab-*.log' \
   --exclude='*' \
-  cm5@xiaocm5:g2-prefx/ \
+  $CM5_USER@$CM5_HOST:g2-prefx/ \
   "$G2_PULL_DIR/"
 
 find "$G2_PULL_DIR" -maxdepth 1 -type f -print

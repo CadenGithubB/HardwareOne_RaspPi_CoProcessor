@@ -4,10 +4,9 @@ CM5-side AI companion for hardwareone: speaks the UART link to the XIAO,
 runs speech-to-text and LLM generation on the CM5 (both resident in one
 program), and returns answers to the device's display surfaces.
 
-- System plan and phasing: [../CM5_AI_SERVICE_PLAN.md](../CM5_AI_SERVICE_PLAN.md)
 - Program architecture: [../ARCHITECTURE.md](../ARCHITECTURE.md)
-- Adversarial audit record: [../CM5_AI_SERVICE_AUDIT.md](../CM5_AI_SERVICE_AUDIT.md)
 - Canonical CM5 paths and sync commands: [../CM5_DEPLOYMENT_PATHS.md](../CM5_DEPLOYMENT_PATHS.md)
+- Investigation runbooks: [../docs/investigations/](../docs/investigations/README.md)
 
 Current state: the service supports manual voice/chat plus the firmware-owned
 native "Hey Even" path. Native work is correlated by a firmware-issued
@@ -287,11 +286,12 @@ sudo -n /usr/local/libexec/hw1-oc-helper reboot-try
 
 **Set expectations first.** On Pi 5 / CM5 the SDRAM clock is not configurable,
 so memory-bandwidth-bound decode may gain much less than compute-heavy prefill.
-There is not yet a valid stock-versus-overclock A/B on this host. Section 2 of
-[../CM5_PI5_PERFORMANCE_RECORD.md](../CM5_PI5_PERFORMANCE_RECORD.md) compares an
-under-volted run with a power-clean run; its `pp128`/`tg64` split must not be
-attributed to clock-only overclocking. Measure the same model's absolute prefill,
-decode, and end-to-end metrics at stock and at every accepted rung.
+There is not yet a valid stock-versus-overclock A/B on this host. An
+under-volted run and a power-clean run differ in ways that must not be
+attributed to clock-only overclocking; see
+[../docs/investigations/llm-serving.md](../docs/investigations/llm-serving.md)
+for the measurement hygiene this needs. Measure the same model's absolute
+prefill, decode, and end-to-end metrics at stock and at every accepted rung.
 
 The root-owned `hw1-oc-helper` keeps normal `/boot/firmware/config.txt` at
 recorded stock and builds each complete candidate as `tryboot.txt`. Raspberry
