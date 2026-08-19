@@ -575,7 +575,7 @@ diagnostic log that no longer needs to remain active:
 The initial baseline is complete; its stable IDs and numbers were recorded for
 one specific firmware/glasses pair and are kept locally. To take the equivalent
 baseline on your own hardware, follow
-[`docs/investigations/render-timing.md`](docs/investigations/render-timing.md).
+[`docs/investigations/render-timing.md`](investigations/render-timing.md).
 Before
 rerunning it, isolate the CONFIG regression with the field-only no-camera
 80/40/80 matrix:
