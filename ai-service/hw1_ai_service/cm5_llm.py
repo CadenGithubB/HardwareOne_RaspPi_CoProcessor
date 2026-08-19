@@ -1,6 +1,6 @@
 """The CM5 as a remote source in the firmware's LLM model registry.
 
-The XIAO owns a model registry in which its on-device engine and this host are
+The ESP32 owns a model registry in which its on-device engine and this host are
 two symmetric *sources*.  Selecting ``cm5:<model>`` on any surface (web, OLED,
 G2, CLI, BLE app) routes the whole conversation here.  The firmware is the UART
 **server** and cannot call us and block, so it pushes an EVT frame and waits for

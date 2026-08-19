@@ -719,7 +719,7 @@ class FanController:
             if not result["ok"]:
                 # A failed request is terminal on the UART protocol. Preserve
                 # the prior logical mode so rediscovery cannot silently apply
-                # a change the XIAO was told had failed.
+                # a change the ESP32 was told had failed.
                 self.requested_mode = previous_mode
                 self._auto_level = previous_auto_level
                 return self.snapshot(ok=False, code=result["code"])

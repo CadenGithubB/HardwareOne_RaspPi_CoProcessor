@@ -223,6 +223,19 @@ firmware's Arduino HAL uses the 40 MHz XTAL instead; its divisor errors differ
 slightly. This is one more reason a PASS here should be confirmed with your
 real application traffic.)
 
+**Classic ESP32 (non-S3).** Not every ESP32 reaches the rates above. A classic
+ESP32 — the one on an Adafruit ESP32 Feather V2, for instance — is limited to
+**460800** on this link. Everything faster in the default sweep will come back
+`UNSUPPORTED` or `FAIL` on that hardware, and that is the board being honest,
+not the tool failing.
+
+The ceiling matters for what the link can carry, not just how fast it feels.
+At 8N1, 460800 is 46,080 B/s; 16 kHz 16-bit mono PCM alone is 32,000 B/s, so
+one direction of live audio already consumes about 69% of the wire and leaves
+little for command traffic. The same audio at 921600 takes 34.7%, and at 2 M
+takes 16%. Plan the audio path around the slowest board you intend to support,
+not around the S3.
+
 **Combined clock-error budget.** 8N1 tolerates roughly ±2% total mismatch
 between the two ends; every configurable pair above is ≤0.35% combined, so at
 ≤3 Mbaud the deciding factors are signal integrity and software keep-up, not

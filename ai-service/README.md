@@ -1,6 +1,6 @@
 # hw1-ai-service
 
-CM5-side AI companion for hardwareone: speaks the UART link to the XIAO,
+CM5-side AI companion for hardwareone: speaks the UART link to the ESP32,
 runs speech-to-text and LLM generation on the CM5 (both resident in one
 program), and returns answers to the device's display surfaces.
 
@@ -36,7 +36,7 @@ reboot probation, `ready` only when a new native wake can be consumed, `busy`
 while an owned job runs, and `degraded` when the AI plane is unavailable.
 Steady state renews every five seconds; firmware fixes the normal lease at 15
 seconds and the busy lease at 75 seconds. This is separate from the systemd
-watchdog: it gives the XIAO recent UART/application readiness, while systemd
+watchdog: it gives the ESP32 recent UART/application readiness, while systemd
 still owns process-loop recovery. Older firmware is tolerated and reprobed
 slowly, so a daemon-first rolling upgrade does not require a service restart.
 If the device reboots while no job is active, ROM garbage or an unexpected
@@ -96,7 +96,7 @@ cd ~/hw1-ai-service
 python3 -m venv ~/hw1ai && . ~/hw1ai/bin/activate
 pip install -e '.[moonshine]'         # or .[zipformer]
 
-# 3. Credentials (created on the XIAO with: useradd cm5svc <pass> 0 admin —
+# 3. Credentials (created on the ESP32 with: useradd cm5svc <pass> 0 admin —
 #    temporary admin for P0's fileread; demoted to user tier at P2):
 install -d -m 0700 ~/.config/hw1-ai-service
 test ! -e ~/.config/hw1-ai-service/credentials
@@ -519,7 +519,7 @@ seconds completed with only about one chunk of timing margin, while 1.0
 seconds overflowed during a 710.3 ms native pass. The new v2 contract makes the
 Pi worker queue eight chunks and raises its queue-age ceiling to 1024 ms; its
 physical 0.5- and 1.0-second reruns preserved every input chunk. Contract v3
-adds the four confirmed no-speech controls without changing the XIAO or
+adds the four confirmed no-speech controls without changing the ESP32 or
 UART-inbox queues. Use the guarded command and acceptance fields in
 [../docs/CM5_DEPLOYMENT_PATHS.md](../docs/CM5_DEPLOYMENT_PATHS.md#real-time-paced-moonshine-replay).
 
@@ -729,7 +729,7 @@ awake again after resume when the UART link survives.
 ## CM5 fan curve and manual modes
 
 Fan control is disabled until the isolated root controller is installed. The
-controller, rather than the unprivileged AI service or the XIAO, owns fan
+controller, rather than the unprivileged AI service or the ESP32, owns fan
 sysfs discovery, the temperature-to-PWM curve, tachometer checks, and safety
 overrides.
 
@@ -764,7 +764,7 @@ From an authenticated HardwareOne admin CLI:
 - `cm5 fan auto` returns to the configured temperature curve.
 - `cm5 fan status` fetches current temperature, requested/effective mode,
   requested and measured PWM, tachometer RPM when present, and health.
-- `cm5 fan` or `cm5 fan show` reads the XIAO's local request/last-report state
+- `cm5 fan` or `cm5 fan show` reads the ESP32's local request/last-report state
   without starting a new transaction.
 
 The controlled value is PWM duty (`0..255`), not a promised RPM. RPM is
@@ -853,7 +853,7 @@ instead of failing.
   harmlessly at the firmware fence. Firmware send failures are terminal, and
   a stale daemon's untagged mutation is rejected and closes the active
   legacy-mismatched exchange instead of leaving it on heartbeats.
-- If the XIAO loses the UART or CM5-service host gate, it best-effort EXITs, terminalizes the
+- If the ESP32 loses the UART or CM5-service host gate, it best-effort EXITs, terminalizes the
   exact exchange, and discards that exchange's owned recording. The reason
   identifies the observed boundary:
 
@@ -899,11 +899,11 @@ instead of failing.
   command `g2aiconfig - 40 -` before model work begins. This does not change
   `voiceSwitch` or `duplexMode`. Set it to `0` to preserve the G2's current
   runtime state for a controlled test; `80` is the other hardware-validated
-  automatic value. A successful XIAO result confirms only that the BLE write
+  automatic value. A successful ESP32 result confirms only that the BLE write
   was submitted, not that the asynchronous G2 CONFIG echo was received. This is a
   startup policy, not a reconciler: a glasses-only power cycle is not detected,
   so restart the daemon if 40 must be reapplied.
-- Every XIAO reset sprays a ROM boot burst that arrives as garbage — the
+- Every ESP32 reset sprays a ROM boot burst that arrives as garbage — the
   session treats it as a reboot hint, immediately fences CM5 presence to
   `starting`, wakes the reconnect supervisor, quiesces (OTA-probation rule),
   and re-logs in. An unexplained authentication-epoch loss takes the same

@@ -1,7 +1,7 @@
 # HardwareOne CM5 fan controller
 
 This service controls the CM5 carrier's dedicated four-wire fan through the
-Raspberry Pi kernel `pwm-fan` driver. The XIAO does not drive the fan pins; its
+Raspberry Pi kernel `pwm-fan` driver. The ESP32 does not drive the fan pins; its
 `cm5 fan` bridge connects to this service's Unix socket.
 
 The controller commands PWM duty (`0..255`) and reports tachometer RPM as

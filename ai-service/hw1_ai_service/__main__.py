@@ -1,7 +1,7 @@
 """CLI entry: hw1-ai-service {probe|ask|chat|daemon}.
 
   probe          open link, log in, run `uartlink status` — first-light check
-  ask            one full voice exchange (record on XIAO -> STT -> LLM -> display)
+  ask            one full voice exchange (record on ESP32 -> STT -> LLM -> display)
   chat "text"    text-only exchange (no mic)
   daemon         hold the session, serve the control socket, run jobs forever
                  (supervises link reconnect: close -> backoff -> reopen -> re-login)
@@ -123,7 +123,7 @@ def _build_live_gate(args, cfg):
 
 
 async def _run(args, cfg) -> None:
-    # Start before UART login: a powered-off/resetting XIAO can legitimately
+    # Start before UART login: a powered-off/resetting ESP32 can legitimately
     # consume the login retry window, but the Python control loop is healthy
     # and must continue satisfying the systemd watchdog during that wait.
     watchdog = SystemdWatchdog.from_environment()
@@ -346,7 +346,7 @@ async def _fail_link_on_new_reboot(session: Session,
 async def _submit_g2_stream_speed(session: Session, speed: int) -> bool:
     """Best-effort daemon initialization of EvenAI CONFIG field 2.
 
-    The firmware command returns after the XIAO builds and writes the BLE
+    The firmware command returns after the ESP32 builds and writes the BLE
     envelope; the G2 CONFIG echo/COMM_RSP arrives asynchronously. Therefore a
     successful return means "submitted", not "confirmed applied". Replaying
     after a timeout is safe because writing the same numeric setting is
@@ -381,7 +381,7 @@ async def _submit_g2_stream_speed(session: Session, speed: int) -> bool:
         return False
 
     log.info(
-        "G2 EvenAI streamSpeed=%d submitted (XIAO accepted BLE write; "
+        "G2 EvenAI streamSpeed=%d submitted (ESP32 accepted BLE write; "
         "G2 CONFIG echo not observed on this channel)",
         speed,
     )

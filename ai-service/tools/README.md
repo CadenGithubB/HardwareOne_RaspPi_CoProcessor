@@ -12,7 +12,7 @@ with the service venv's interpreter.
 
 | Tool | Use |
 | --- | --- |
-| `g2_evenai_probe.py` | send one command to the XIAO and print the reply; the workhorse for every by-hand link check |
+| `g2_evenai_probe.py` | send one command to the ESP32 and print the reply; the workhorse for every by-hand link check |
 | `live_pcm_transport_probe.py` | deterministic synthetic transport probe — no capture hardware involved |
 | `live_pcm_shadow_probe.py` | live-vs-retained capture parity and the injected-fault matrix |
 | `run_native_live_stt_gate.sh` | end-to-end native gate; drives both probes above |

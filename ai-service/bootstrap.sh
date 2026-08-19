@@ -122,7 +122,7 @@ else
     note "(this is the Pi 5 family overlay; plain 'uart2' is the Pi 4 one and does nothing here)"
     if confirm "append $OVERLAY to $BOOT_CFG?"; then
         run sudo cp -n "$BOOT_CFG" "$BOOT_CFG.hw1.bak"
-        run sudo sh -c "printf '\n# hw1-ai-service: UART link to the XIAO on GPIO4/5\n%s\n' '$OVERLAY' >> '$BOOT_CFG'"
+        run sudo sh -c "printf '\n# hw1-ai-service: UART link to the ESP32 on GPIO4/5\n%s\n' '$OVERLAY' >> '$BOOT_CFG'"
         todo "reboot to create $PORT, then re-run this script"
     else
         todo "add '$OVERLAY' to $BOOT_CFG and reboot, then re-run this script"
@@ -180,7 +180,7 @@ if [ -e "$CREDS" ]; then
     fi
 else
     todo "create $CREDS (chmod 600), one line: '<user> <password>'"
-    note "     the account is made on the XIAO first, e.g.  useradd cm5svc <pass> 0 admin"
+    note "     the account is made on the ESP32 first, e.g.  useradd cm5svc <pass> 0 admin"
     note "     this script will not invent a credential for you"
 fi
 

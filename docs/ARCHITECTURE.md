@@ -14,8 +14,8 @@
 
 The CM5-side companion program: one long-lived user daemon that speaks the UART
 link, provides independent Linux power and fan-control bridges, receives
-voice/prompts from the XIAO, runs speech-to-text and LLM generation when those
-engines are available, and returns answers to the XIAO's display surfaces. A
+voice/prompts from the ESP32, runs speech-to-text and LLM generation when those
+engines are available, and returns answers to the ESP32's display surfaces. A
 separate, narrowly privileged system service owns the persistent fan curve and
 its fail-safe sysfs writes.
 
@@ -219,7 +219,7 @@ firmware.
   command lock (single-writer discipline; matches the firmware's
   loop-task-only writer).
 - Reconnect: on serial exceptions the transport closes, backs off
-  (1s→2s→5s cap), reopens, and signals the Session to re-login. The XIAO
+  (1s→2s→5s cap), reopens, and signals the Session to re-login. The ESP32
   resetting (ROM burst, then silence, then a live drain) is a NORMAL
   event, not an error path.
 - The reader already demultiplexes 0x00-delimited COBS frames interleaved with
@@ -366,7 +366,7 @@ infer from the sysfs readback alone.
 `fan.py` is an unprivileged, nonblocking bridge. It accepts only the versioned
 EVTs `cm5_fan_status 1 <id>` and `cm5_fan_mode_auto|quiet|max 1 <id>`, queues
 them outside the Session event callback, and returns finite authenticated
-`cm5 fan ack` / `cm5 fan report` commands. The XIAO supplies no path, threshold,
+`cm5 fan ack` / `cm5 fan report` commands. The ESP32 supplies no path, threshold,
 PWM, or shell fragment. IDs are cached for dedupe within one authenticated UART
 epoch; link reset discards old records because firmware deliberately rejects a
 callback after a replacement login. An idempotent mode may already have reached
@@ -405,7 +405,7 @@ permission and cannot widen the controller's finite command vocabulary.
 
 ### cm5_llm.py — this host as a source in the firmware's LLM model registry
 
-The XIAO owns a model registry in which its on-device engine and this host are
+The ESP32 owns a model registry in which its on-device engine and this host are
 two symmetric *sources*; picking `cm5:<model>` on any surface (web, OLED, G2,
 CLI, BLE app) routes that whole conversation here. The firmware is the server
 and cannot call us and block, so it pushes `llm_select` / `llm_ask` /
@@ -562,7 +562,7 @@ the batch engine only after canonical WAV finalization.
   "OLED display not running" → one `oledstart` attempt if config allows,
   then retry once; "G2 not connected" → log and drop that target.
   P3 replaces this with `llmpush <session> <seq> <chunk>` streaming (live
-  typing on the XIAO surfaces); `deliver.py` keeps the fallback path.
+  typing on the ESP32 surfaces); `deliver.py` keeps the fallback path.
 
 Reboot/absence handling: ROM-burst garbage on the RX queue → transport
 flags a probable reboot → pipeline aborts any in-flight exchange cleanly,
@@ -594,7 +594,7 @@ session quiesces (OTA probation rule), re-login, resume polling.
   consumption, non-systemd no-op behavior, startup ordering, shutdown cleanup,
   and the matching user-unit policy without requiring a running systemd.
 - On-Pi validation (P0 exit criteria): login + `uartlink status` probe;
-  one full `ask` exchange against the bench XIAO; the §8-plan benches
+  one full `ask` exchange against the bench ESP32; the §8-plan benches
   (STT RTF solo/contended, llama-bench ladder, prompt-cache hit check,
   multi-second stall soak on the real tty); answer visible via `oledtext`
   reply — all before any firmware work starts.
@@ -615,7 +615,7 @@ session quiesces (OTA probation rule), re-login, resume polling.
 | P2 | frame writer, `voicefetch`, default-off recorder shadow | COBS/live demux, bounded inbox, burst fetch, synthetic and exact-owned standalone probes are built; production pipeline remains batch |
 | P3 | remote LLM backend + `llmpush` | `deliver.py`: llmpush streaming (2-5Hz chunks); pipeline reports session/seq; multi-turn context stays here |
 | P4 | production live-audio enable + push lines | connect the already-built recorder transport to one streaming STT worker; `jobs.py`: push-line doorbell replaces polling |
-| P5 | wake word on XIAO | no change here — triggers just arrive without a button |
+| P5 | wake word on the ESP32 | no change here — triggers just arrive without a button |
 
 The interfaces that make this additive: `JobSource` (manual → poll →
 push), `STTEngine` (batch → streaming), fetch (files → burst → stream),
@@ -685,7 +685,7 @@ commands, so daemon startup cannot silently change production capture behavior.
 
 ## 10. Getting started (the actual steps, in order)
 
-On the XIAO (bench, once):
+On the ESP32 (bench, once):
 1. Keep `uartlink on` + `uartRequireAuth=1` as already validated.
 2. Create the temporary P0 admin account (fileread needs it; demoted to a
    'user'-tier account at P2 per plan D2): `useradd cm5svc <pass> 0 admin`.

@@ -36,7 +36,7 @@ directory. Remote paths are written `/home/$CM5_USER/...`.
 | Last captured utterance | `/home/$CM5_USER/.cache/hw1-ai-service/last-utterance.wav` |
 | LLM models | `/home/$CM5_USER/models` |
 | llama.cpp checkout | `/home/$CM5_USER/llama.cpp` |
-| XIAO UART | `/dev/ttyAMA2` at 2,000,000 baud |
+| ESP32 UART | `/dev/ttyAMA2` at 2,000,000 baud |
 
 `/home/$CM5_USER/hw1ai` is a virtual environment, not another source checkout.
 The only current CM5 source directory is `/home/$CM5_USER/hw1-ai-service`.
@@ -101,7 +101,7 @@ delete remote files.
 ## Prompt-only AI-service update
 
 A system-prompt change is CM5 Python/YAML work only. It does not change the
-UART grammar and needs no XIAO flash. The package is installed editable from
+UART grammar and needs no ESP32 flash. The package is installed editable from
 the canonical source directory, so syncing `.py` files and restarting the user
 service is sufficient; no package reinstall or `daemon-reload` is needed.
 
@@ -202,7 +202,7 @@ service. The stable
 ## Coordinated exchange-ID cancellation deployment
 
 The native dismissal contract changes both ends of the UART grammar. Deploy the
-CM5 service and XIAO image as one maintenance operation. A mismatched pair is
+CM5 service and ESP32 image as one maintenance operation. A mismatched pair is
 designed to fail closed rather than mutate an unrelated exchange, but it may
 ignore a wake or produce no answer. In particular, new firmware rejects a stale
 daemon's untagged mutation and terminalizes the active exchange as
@@ -250,7 +250,7 @@ rsync -av --itemize-changes \
   $CM5_USER@$CM5_HOST:hw1-ai-service/
 ```
 
-Flash the XIAO from the Mac. Substitute the exact port printed by the first
+Flash the ESP32 from the Mac. Substitute the exact port printed by the first
 command; do not leave the wildcard in the flash command:
 
 ```bash
@@ -265,9 +265,9 @@ ln -sfn "$CANCEL_LOCAL_DIR" "$PWD/.scratch/evenai-cancel-latest"
 find /dev -maxdepth 1 \
   \( -name 'cu.usbmodem*' -o -name 'cu.usbserial*' \) \
   -print
-XIAO_PORT=/dev/cu.usbmodem_REPLACE_WITH_EXACT_PORT
+ESP32_PORT=/dev/cu.usbmodem_REPLACE_WITH_EXACT_PORT
 
-./tools/build_board.sh xiao_s3 -p "$XIAO_PORT" flash monitor \
+./tools/build_board.sh xiao_s3 -p "$ESP32_PORT" flash monitor \
   2>&1 | tee "$CANCEL_LOCAL_DIR/xiao-flash-monitor.log"
 ```
 
@@ -294,8 +294,8 @@ PY
 
 Both printed module paths must begin with
 `$HOME/hw1-ai-service/hw1_ai_service/`. The next native wake should show
-a strict 16-hex ID in the XIAO log. The maintained probe's `preflight` command
-also requires the XIAO capability `exchange-id-v1`; run it only with the daemon
+a strict 16-hex ID in the ESP32 log. The maintained probe's `preflight` command
+also requires the ESP32 capability `exchange-id-v1`; run it only with the daemon
 stopped, as documented below.
 
 ### Physical dismissal matrix
@@ -358,7 +358,7 @@ systemctl --user --no-pager -l status hw1-ai-service.service \
   2>&1 | tee "$CANCEL_DIR/systemd-status-after.log"
 ```
 
-For each dismissal, correlate one ID across the two logs. The XIAO should show
+For each dismissal, correlate one ID across the two logs. The ESP32 should show
 `terminal id=<id> reason=dismiss`, advisory cancel-copy delivery, and
 `stop+discard` when that ID still owned the recorder. The CM5 should log the
 same ID as canceled and must not issue any later tagged ASK/reply mutation for
@@ -367,7 +367,7 @@ continue briefly after a dismissal; visible delivery, persistence, and history
 commit must not.
 
 Pull the CM5 run into the same Mac evidence directory that already contains
-the XIAO flash/serial log. The stable links on both machines avoid relying on a
+the ESP32 flash/serial log. The stable links on both machines avoid relying on a
 shell variable surviving across terminals and cannot silently produce the
 empty `evenai-cancel-` path seen with an unset timestamp variable:
 
@@ -445,15 +445,15 @@ install or invoke a second copy from `~/.local/bin`.
 The daemon now defaults `deliver.g2_stream_speed` to `40`. Each daemon start
 attempts the exact field-only command `g2aiconfig - 40 -` before loading the AI
 models; it does not write `voiceSwitch` or `duplexMode`, and it does not require
-another XIAO flash. Confirm a locally successful host-side attempt with:
+another ESP32 flash. Confirm a locally successful host-side attempt with:
 
 ```bash
 journalctl --user -u hw1-ai-service.service -n 100 --no-pager \
   | grep 'G2 EvenAI streamSpeed=40 submitted'
 ```
 
-That line means the XIAO accepted the BLE write, not that the Pi observed the
-G2's asynchronous CONFIG echo. A local XIAO error, unknown command, timeout,
+That line means the ESP32 accepted the BLE write, not that the Pi observed the
+G2's asynchronous CONFIG echo. A local ESP32 error, unknown command, timeout,
 failed re-login, or no reachable temple is logged and does not prevent daemon
 startup. An older G2 can still reject the write asynchronously without that
 rejection reaching this daemon log. This is startup-only: it does not detect a
@@ -524,7 +524,7 @@ Always restart the service when the diagnostic is finished.
 
 The canonical runner is
 `$HOME/hw1-ai-service/tools/link/g2_evenai_probe.py`. It measures all reply
-delays from the XIAO's UART command result, not command submission. That result
+delays from the ESP32's UART command result, not command submission. That result
 is **not** a G2 receipt or optical-render event; the fetched protocol log
 contains the separate G2 echo and `STREAM_COMPLETE` timestamps. The runner
 never requires a camera or video.
@@ -552,7 +552,7 @@ Calibrate the fixed 98-character question. The runner asks for five fresh
 
 Compare the exact same 180-character answer through the one-shot and multipart
 render paths. It runs three fresh sessions per mode, alternates order, closes
-its own XIAO log, fetches it, and prints the `STREAM_COMPLETE` markers. The
+its own ESP32 log, fetches it, and prints the `STREAM_COMPLETE` markers. The
 default wait is now 20 seconds because the old 12-second run was shorter than
 the conditional CONFIG-80 per-step prediction:
 
@@ -562,7 +562,7 @@ the conditional CONFIG-80 per-step prediction:
   render-ab
 ```
 
-`render-ab` refuses to reuse an active XIAO system log because its unflushed
+`render-ab` refuses to reuse an active ESP32 system log because its unflushed
 tail could omit the terminal marker. Check first; stop it only if it is an old
 diagnostic log that no longer needs to remain active:
 
@@ -591,7 +591,7 @@ rerunning it, isolate the CONFIG regression with the field-only no-camera
   speed-ab
 ```
 
-The command uses one fresh wake per value, captures and fetches its own XIAO
+The command uses one fresh wake per value, captures and fetches its own ESP32
 log, and correlates every typed CONFIG request by magic value with its echoed
 field-2 value, one ANALYSE and REPLY response, one pre-EXIT
 `STREAM_COMPLETE`, and no COMM_RSP. It reports both native REPLY-TX-to-
@@ -609,7 +609,7 @@ systemctl --user is-active hw1-ai-service.service
 
 ## Synthetic live-PCM transport probe
 
-This is the Phase 2A transport-only hardware gate. It requires a matching XIAO
+This is the Phase 2A transport-only hardware gate. It requires a matching ESP32
 image and CM5 source tree, but it does not use PDM, the G2 microphone, the
 recorder, Moonshine, the AI pipeline, or the lens. Firmware must advertise
 `live-pcm-v1` and `synthetic=1`; current firmware may also advertise the
@@ -801,7 +801,7 @@ PDM/G2/parity/fault evidence recorded above and below.
 ### Recorder-shadow controlled fault matrix
 
 After syncing the current CM5 service tree, this matrix exercises four
-non-destructive live failures. It does not require another XIAO flash and never
+non-destructive live failures. It does not require another ESP32 flash and never
 starts STT, the LLM, or answer delivery. Each invocation exits zero only when
 the requested live failure occurred and the exact owner's independently
 fetched WAV remained canonical. The service is restored by the shell trap.
@@ -904,16 +904,16 @@ systemctl --user is-active hw1-ai-service.service
 Expected terminal evidence is local invalidation `pcm_queue_overflow` for
 `host-overflow`, exact `wire_seq:3!=2` for `host-gap`, ABORT reason 5 for
 `host-abort`, and ABORT reason 1 for `lease-expire`. Host-only failures must
-still find exact current-exchange `last=end` count/CRC metadata on the XIAO;
+still find exact current-exchange `last=end` count/CRC metadata on the ESP32;
 ABORT modes must match the canonical WAV prefix count and CRC. In every case
-the XIAO WAV is fetched before exact-ID deletion and retained under the printed
+the ESP32 WAV is fetched before exact-ID deletion and retained under the printed
 Pi evidence directory. Final G2 `mutex_drop` and `decode_fail` must remain zero;
 cumulative AFE overrun may rise while the ring is unattended.
 
 **Physical status (2026-08-10): PASS.** All four invocations exited zero with
 `ok=true`, the requested failure observed, a canonical owner WAV, no control or
 lease errors, and no STT. Host overflow invalidated locally as
-`pcm_queue_overflow` while the XIAO retained exact END metadata for exchange
+`pcm_queue_overflow` while the ESP32 retained exact END metadata for exchange
 `cd74f8237804041c` (102,400 samples, CRC32 `47b0c4eb`, zero drops). Host gap
 invalidated as `wire_seq:3!=2` with exact END for `cb04bb4a07723fad` (100,800
 samples, CRC32 `89b23a88`, zero drops). Host ABORT returned reason 5 for
@@ -933,7 +933,7 @@ ignored `.scratch/live-shadow-faults-yDWYIwPr` directory.
 This is the isolated physical-gate runbook and regression form. It observes one
 firmware-owned native G2 capture through the same default-off recorder tee, but it never starts
 Moonshine, the LLM, ASK, or REPLY. It must not be described as a live-STT test.
-The XIAO firmware is already built/flashed for this grammar; sync only the CM5
+The ESP32 firmware is already built/flashed for this grammar; sync only the CM5
 service tree before running it.
 
 The probe's `--wake-timeout` is how long the operator has to say `Hey Even`
@@ -1286,7 +1286,7 @@ daemon/YAML defaults, and production streaming STT remains disabled.
 
 ## Real-time-paced Moonshine replay
 
-The replay probe does not use the UART, XIAO, or G2. It feeds saved XIAO WAVs
+The replay probe does not use the UART, ESP32, or G2. It feeds saved ESP32 WAVs
 at the recorder's real 4096-byte / 128 ms cadence through a bounded
 eight-chunk / 32 KiB / 1.024-second Pi worker queue and the installed Moonshine
 streaming API. It refuses an ambiguous model
