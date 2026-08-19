@@ -128,7 +128,7 @@ real tty. The model ladder below is the newer, reproducible follow-up screen.
 
 ## Reproducible CM5 LLM throughput ladder (up to 3B-class)
 
-`tools/benchmark_llm_models.sh` compares the active configured GGUF against a
+`tools/llm/benchmark_llm_models.sh` compares the active configured GGUF against a
 pinned Q4_0 ladder without changing `config.yaml` or replacing the live model.
 The compact ladder is the active model, Qwen3.5-2B Q4_0, and Granite 4.1 3B
 Q4_0. Granite's GGUF reports about 3.4 billion parameters despite its `3B`
@@ -136,7 +136,7 @@ marketing name, so it is the upper 3B-class bound rather than a strict ≤3.0B
 model. Exact revisions, byte counts, and hashes for the
 [Qwen3.5 quant](https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF) and
 [official Granite GGUF](https://huggingface.co/ibm-granite/granite-4.1-3b-GGUF)
-are kept in `tools/llm_benchmark_models.tsv`. The script uses the historical
+are kept in `tools/llm/llm_benchmark_models.tsv`. The script uses the historical
 comparison command exactly:
 
 ```bash
@@ -147,7 +147,7 @@ Run it while logged into the CM5 service account:
 
 ```bash
 cd ~/hw1-ai-service
-./tools/benchmark_llm_models.sh
+./tools/llm/benchmark_llm_models.sh
 ```
 
 The runner downloads about 3.3 GB of pinned, SHA-256-verified candidates into
@@ -182,8 +182,8 @@ physical power loss, and any nonzero `get_throttled` value invalidates the run.
 Download and benchmark can be split across sessions:
 
 ```bash
-./tools/benchmark_llm_models.sh --download-only
-./tools/benchmark_llm_models.sh --benchmark-only
+./tools/llm/benchmark_llm_models.sh --download-only
+./tools/llm/benchmark_llm_models.sh --benchmark-only
 ```
 
 The result is a throughput screen, not a final model decision. `llama-bench`
@@ -198,11 +198,11 @@ need the same production system prompt, output cap, a small fixed quality
 prompt set, and a production-depth TTFT/cache test. Qwen3.5 must specifically
 pass an explicit multi-turn llama-server cache-reuse test before any switch
 because its hybrid architecture may cache differently from the current plain
-Qwen3 model. `tools/benchmark_llm_serve.sh`, below, is that test.
+Qwen3 model. `tools/llm/benchmark_llm_serve.sh`, below, is that test.
 
 ## Production-depth llama-server latency sweep
 
-`tools/benchmark_llm_serve.sh` is the follow-up screen the throughput ladder
+`tools/llm/benchmark_llm_serve.sh` is the follow-up screen the throughput ladder
 above explicitly defers to. It answers "how fast does a turn feel" rather than
 "how fast does this GGUF decode", and it exists because `llama-bench` cannot
 answer two questions that now matter:
@@ -237,10 +237,10 @@ Then, on the CM5 service account:
 
 ```bash
 cd ~/hw1-ai-service
-./tools/benchmark_llm_serve.sh
+./tools/llm/benchmark_llm_serve.sh
 ```
 
-Candidates are pinned in `tools/llm_serve_models.tsv` with revisions, byte
+Candidates are pinned in `tools/llm/llm_serve_models.tsv` with revisions, byte
 counts, and SHA-256 values, and are fetched by delegating to
 `benchmark_llm_models.sh --download-only` so there is exactly one audited
 download path. They share `~/models/hw1-llm-bench`, so anything either tool has
@@ -275,8 +275,8 @@ power profile and restarts the service only if it was active before the run.
 Download and sweep split the same way:
 
 ```bash
-./tools/benchmark_llm_serve.sh --download-only
-./tools/benchmark_llm_serve.sh --serve-only
+./tools/llm/benchmark_llm_serve.sh --download-only
+./tools/llm/benchmark_llm_serve.sh --serve-only
 ```
 
 Sampling is production's, not greedy, so answers differ between runs and only
@@ -284,19 +284,19 @@ the rates are comparable. The sweep runs with the daemon stopped, so peak RSS
 excludes resident Moonshine; the fits-8 GB column adds an estimate back, but
 real co-residency is still its own test.
 
-## Overclock stepping and stability (`tools/oc_step.sh`)
+## Overclock stepping and stability (`tools/llm/oc_step.sh`)
 
 Walks the CM5 up an overclock ladder one rung at a time, with a verdict per
 rung instead of a vibe.
 
 ```bash
-./tools/oc_step.sh status              # configured vs measured vs kernel ceiling
+./tools/llm/oc_step.sh status              # configured vs measured vs kernel ceiling
 sudo ./systemd/install-oc-helper.sh "$USER"  # one-time finite privilege boundary
 sudo -n /usr/local/libexec/hw1-oc-helper normalize-stock
 sudo -n /usr/local/libexec/hw1-oc-helper stage 2600 0
 sudo -n /usr/local/libexec/hw1-oc-helper reboot-try
-./tools/oc_step.sh soak --minutes 15 --expected-mhz 2600 --expected-tryboot 1
-./tools/oc_step.sh ladder              # every rung tried and its verdict
+./tools/llm/oc_step.sh soak --minutes 15 --expected-mhz 2600 --expected-tryboot 1
+./tools/llm/oc_step.sh ladder              # every rung tried and its verdict
 ```
 
 **Set expectations first.** On Pi 5 / CM5 the SDRAM clock is not configurable,
@@ -381,7 +381,7 @@ sleep 2
 fuser -v /dev/ttyAMA2
 
 ~/hw1ai/bin/python \
-  ~/hw1-ai-service/tools/live_pcm_transport_probe.py \
+  ~/hw1-ai-service/tools/link/live_pcm_transport_probe.py \
   -c ~/.config/hw1-ai-service/config.yaml \
   --duration-ms 10000
 
@@ -399,7 +399,7 @@ canonical evidence-capture form in
 
 ## Recorder-shadow PCM/WAV probe
 
-`tools/live_pcm_shadow_probe.py` is a separate standalone diagnostic for the
+`tools/link/live_pcm_shadow_probe.py` is a separate standalone diagnostic for the
 default-off recorder tee. In `owned` mode it preflights the exact PDM or G2
 source and canonical 16 kHz mono S16LE format, acquires/renews the controller
 lease, arms one exact owned exchange, records untrimmed PCM, waits for the live
@@ -435,7 +435,7 @@ flowing.
 
 ```bash
 ~/hw1ai/bin/python \
-  ~/hw1-ai-service/tools/live_pcm_shadow_probe.py \
+  ~/hw1-ai-service/tools/link/live_pcm_shadow_probe.py \
   -c ~/.config/hw1-ai-service/config.yaml \
   owned --expected-source g2 --record-seconds 6 \
   --output-dir ~/g2-prefx/live-pcm-shadow-$(date +%Y%m%d-%H%M%S)
@@ -486,16 +486,16 @@ capture, acceptance, and regression steps in
 
 ## Paced Moonshine replay diagnostic
 
-`tools/moonshine_stream_replay.py` is a standalone saved-WAV measurement tool,
+`tools/stt/moonshine_stream_replay.py` is a standalone saved-WAV measurement tool,
 not the production pipeline. It paces 4096-byte/128 ms PCM chunks through a
 bounded eight-chunk / 32 KiB / 1.024-second FIFO owned by one Moonshine worker,
 freezes streaming
 metrics before the default batch baseline, and emits model identity, event,
 accuracy, queue, latency, resource, and case-summary JSONL records.
 
-`tools/moonshine_stream_replay_check.py` grades one cadence against a trusted
+`tools/stt/moonshine_stream_replay_check.py` grades one cadence against a trusted
 manifest. The first guarded run uses
-`tools/moonshine_gate0a_medium_slice.json`: hash-pinned positive pairs 001, 002,
+`tools/stt/moonshine_gate0a_medium_slice.json`: hash-pinned positive pairs 001, 002,
 and 005 plus human-audited static/no-speech controls neg001 through neg004, the
 exact corpus directory and deployed medium-streaming model/enum,
 Moonshine 0.1.1 runtime, pinned policy and absolute error ceilings, 0.5-second
@@ -534,7 +534,7 @@ at both cadences and also prefixed `Yeah` to positive case 002. Both reports
 correctly remain policy failures and `full_gate0a_complete=false`.
 
 `hw1_ai_service/stt/live.py` and the separate
-`tools/live_pcm_shadow_probe.py native-stt` mode form the current default-off
+`tools/link/live_pcm_shadow_probe.py native-stt` mode form the current default-off
 gate.
 The worker coalesces small UART PCM frames into 4096-byte chunks, queues eight
 chunks (32 KiB / 1.024 s), and drains FIFO immediately after each synchronous
@@ -544,7 +544,7 @@ and a 2.0-second hard wait. It never starts the LLM or sends ASK/REPLY; model
 failure cannot stop transport draining or invalidate the canonical WAV.
 The live worker plus native-shadow focused suite passes 41 tests under
 `-W error`; the complete CM5 suite passes 348 with 1 skipped and 7 subtests.
-Use `tools/run_native_live_stt_gate.sh` for the physical run; it restores the
+Use `tools/link/run_native_live_stt_gate.sh` for the physical run; it restores the
 prior power profile and service/UART ownership on every exit.
 
 The first corrected physical native-STT run completed the full G2/live/WAV

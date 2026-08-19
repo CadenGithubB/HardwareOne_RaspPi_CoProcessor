@@ -523,7 +523,7 @@ Always restart the service when the diagnostic is finished.
 ## No-camera G2 render diagnostics
 
 The canonical runner is
-`$HOME/hw1-ai-service/tools/g2_evenai_probe.py`. It measures all reply
+`$HOME/hw1-ai-service/tools/link/g2_evenai_probe.py`. It measures all reply
 delays from the XIAO's UART command result, not command submission. That result
 is **not** a G2 receipt or optical-render event; the fetched protocol log
 contains the separate G2 echo and `STREAM_COMPLETE` timestamps. The runner
@@ -537,7 +537,7 @@ fuser -v /dev/ttyAMA2
 
 cd "$HOME"
 "$HOME/hw1ai/bin/python" \
-  "$HOME/hw1-ai-service/tools/g2_evenai_probe.py" \
+  "$HOME/hw1-ai-service/tools/link/g2_evenai_probe.py" \
   preflight
 ```
 
@@ -546,7 +546,7 @@ Calibrate the fixed 98-character question. The runner asks for five fresh
 
 ```bash
 "$HOME/hw1ai/bin/python" \
-  "$HOME/hw1-ai-service/tools/g2_evenai_probe.py" \
+  "$HOME/hw1-ai-service/tools/link/g2_evenai_probe.py" \
   ask-threshold
 ```
 
@@ -558,7 +558,7 @@ the conditional CONFIG-80 per-step prediction:
 
 ```bash
 "$HOME/hw1ai/bin/python" \
-  "$HOME/hw1-ai-service/tools/g2_evenai_probe.py" \
+  "$HOME/hw1-ai-service/tools/link/g2_evenai_probe.py" \
   render-ab
 ```
 
@@ -568,12 +568,12 @@ diagnostic log that no longer needs to remain active:
 
 ```bash
 "$HOME/hw1ai/bin/python" \
-  "$HOME/hw1-ai-service/tools/g2_evenai_probe.py" \
+  "$HOME/hw1-ai-service/tools/link/g2_evenai_probe.py" \
   cmd 'log status'
 
 # Run only when the preceding status says ACTIVE and that old log may be closed.
 "$HOME/hw1ai/bin/python" \
-  "$HOME/hw1-ai-service/tools/g2_evenai_probe.py" \
+  "$HOME/hw1-ai-service/tools/link/g2_evenai_probe.py" \
   cmd 'log stop'
 ```
 
@@ -587,7 +587,7 @@ rerunning it, isolate the CONFIG regression with the field-only no-camera
 
 ```bash
 "$HOME/hw1ai/bin/python" \
-  "$HOME/hw1-ai-service/tools/g2_evenai_probe.py" \
+  "$HOME/hw1-ai-service/tools/link/g2_evenai_probe.py" \
   speed-ab
 ```
 
@@ -636,7 +636,7 @@ mkdir -p "$LIVE_PCM_DIR"
 
 set -o pipefail
 "$HOME/hw1ai/bin/python" \
-  "$HOME/hw1-ai-service/tools/live_pcm_transport_probe.py" \
+  "$HOME/hw1-ai-service/tools/link/live_pcm_transport_probe.py" \
   -c "$HOME/.config/hw1-ai-service/config.yaml" \
   --duration-ms 10000 \
   2>&1 | tee "$LIVE_PCM_DIR/live-pcm-probe.log"
@@ -690,8 +690,8 @@ fuser -v /dev/ttyAMA2 || true
 set -Eeuo pipefail
 
 PY="$HOME/hw1ai/bin/python"
-G2_PROBE="$HOME/hw1-ai-service/tools/g2_evenai_probe.py"
-SHADOW_PROBE="$HOME/hw1-ai-service/tools/live_pcm_shadow_probe.py"
+G2_PROBE="$HOME/hw1-ai-service/tools/link/g2_evenai_probe.py"
+SHADOW_PROBE="$HOME/hw1-ai-service/tools/link/live_pcm_shadow_probe.py"
 CFG="$HOME/.config/hw1-ai-service/config.yaml"
 
 SHADOW_STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -811,8 +811,8 @@ bash <<'BASH'
 set -Eeuo pipefail
 
 PY="$HOME/hw1ai/bin/python"
-G2_PROBE="$HOME/hw1-ai-service/tools/g2_evenai_probe.py"
-SHADOW_PROBE="$HOME/hw1-ai-service/tools/live_pcm_shadow_probe.py"
+G2_PROBE="$HOME/hw1-ai-service/tools/link/g2_evenai_probe.py"
+SHADOW_PROBE="$HOME/hw1-ai-service/tools/link/live_pcm_shadow_probe.py"
 CFG="$HOME/.config/hw1-ai-service/config.yaml"
 FAULT_ROOT="$HOME/g2-prefx/live-shadow-faults-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$FAULT_ROOT"
@@ -986,8 +986,8 @@ bash <<'BASH'
 set -Eeuo pipefail
 
 PY="$HOME/hw1ai/bin/python"
-G2_PROBE="$HOME/hw1-ai-service/tools/g2_evenai_probe.py"
-SHADOW_PROBE="$HOME/hw1-ai-service/tools/live_pcm_shadow_probe.py"
+G2_PROBE="$HOME/hw1-ai-service/tools/link/g2_evenai_probe.py"
+SHADOW_PROBE="$HOME/hw1-ai-service/tools/link/live_pcm_shadow_probe.py"
 CFG="$HOME/.config/hw1-ai-service/config.yaml"
 NATIVE_ROOT="$HOME/g2-prefx/native-shadow-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$NATIVE_ROOT"
@@ -1312,9 +1312,9 @@ bash <<'BASH'
 set -Eeuo pipefail
 
 PY="$HOME/hw1ai/bin/python"
-COLLECTOR="$HOME/hw1-ai-service/tools/moonshine_stream_replay.py"
-CHECKER="$HOME/hw1-ai-service/tools/moonshine_stream_replay_check.py"
-MANIFEST_SOURCE="$HOME/hw1-ai-service/tools/moonshine_gate0a_medium_slice.json"
+COLLECTOR="$HOME/hw1-ai-service/tools/stt/moonshine_stream_replay.py"
+CHECKER="$HOME/hw1-ai-service/tools/stt/moonshine_stream_replay_check.py"
+MANIFEST_SOURCE="$HOME/hw1-ai-service/tools/stt/moonshine_gate0a_medium_slice.json"
 CORPUS="$HOME/stt-corpus"
 MODEL="$HOME/.cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized_26_07_30"
 POWER_HELPER=/usr/local/libexec/hw1-power-helper
@@ -1620,7 +1620,7 @@ the daemon does not advertise a live lease, the production pipeline remains
 batch-only, and no partial/final transcript is sent to the glasses or LLM.
 
 The preferred physical runner is
-`$HOME/hw1-ai-service/tools/run_native_live_stt_gate.sh`. It owns the
+`$HOME/hw1-ai-service/tools/link/run_native_live_stt_gate.sh`. It owns the
 service/UART/power/G2 preflight and EXIT restoration, validates `result.json`,
 and writes the latest evidence path to
 `$HOME/g2-prefx/native-live-stt-latest.txt`. Sync the complete
@@ -1671,7 +1671,7 @@ MODEL="$HOME/.cache/moonshine_voice/download.moonshine.ai/model/medium-streaming
 OUT="$(mktemp -d "$HOME/g2-prefx/native-live-stt-$(date +%Y%m%d-%H%M%S)-XXXXXXXX")"
 
 PYTHONPATH="$SERVICE_ROOT" "$PY" \
-  "$SERVICE_ROOT/tools/live_pcm_shadow_probe.py" \
+  "$SERVICE_ROOT/tools/link/live_pcm_shadow_probe.py" \
   -c "$HOME/.config/hw1-ai-service/config.yaml" \
   native-stt \
   --model-dir "$MODEL" \

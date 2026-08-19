@@ -16,7 +16,7 @@ protocol this daemon speaks.
 | [`ai-service/`](ai-service/) | the daemon — Python package, tests, tools, and the privileged host-control units |
 | [`ai-service/hw1_ai_service/`](ai-service/hw1_ai_service/) | the package itself: link, audio, STT, LLM, pipeline, control planes |
 | [`ai-service/tests/`](ai-service/tests/) | the full suite — runs on any POSIX machine with no hardware and no models |
-| [`ai-service/tools/`](ai-service/tools/) | operator probes and benchmarks, grouped by what they investigate |
+| [`ai-service/tools/`](ai-service/tools/README.md) | operator probes and benchmarks, grouped into `link/`, `stt/`, `llm/` by what they investigate |
 | [`ai-service/systemd/`](ai-service/systemd/) | units, the two privileged helper daemons, their sudo policy, and installers |
 | [`docs/`](docs/) | architecture, deployment paths, and the investigation runbooks |
 | [`docs/investigations/`](docs/investigations/README.md) | how to diagnose this setup on whatever hardware you have |

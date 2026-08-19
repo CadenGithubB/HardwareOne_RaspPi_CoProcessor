@@ -22,7 +22,7 @@ or contaminate the streaming result.
 
 Typical CM5 use (from ~/hw1-ai-service):
 
-    ~/hw1ai/bin/python tools/moonshine_stream_replay.py \
+    ~/hw1ai/bin/python tools/stt/moonshine_stream_replay.py \
       ~/stt-corpus/001.wav \
       ~/stt-corpus/002.wav \
       ~/stt-corpus/005.wav \
@@ -31,7 +31,7 @@ Typical CM5 use (from ~/hw1-ai-service):
       --output ~/stt-results/moonshine-medium-0500ms.jsonl
 
 Run a separate process/output for every model and update interval.  Then grade
-the retained JSONL with ``tools/moonshine_stream_replay_check.py``; this
+the retained JSONL with ``tools/stt/moonshine_stream_replay_check.py``; this
 collector's exit status covers runtime integrity, not transcript quality or
 the Gate 0A latency/partial policy.  The model directory and streaming
 architecture are required: the language-code catalog

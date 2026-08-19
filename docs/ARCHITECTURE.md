@@ -189,8 +189,8 @@ ai-service/
     │                         #   reassembly, seq/retry, terminal-end paths
     └── test_soak.py          # stall-injection burst soak (slow marker)
 
-tools/live_pcm_transport_probe.py     # standalone deterministic UART probe
-tools/live_pcm_shadow_probe.py        # standalone exact-owned live/WAV probe
+tools/link/live_pcm_transport_probe.py     # standalone deterministic UART probe
+tools/link/live_pcm_shadow_probe.py        # standalone exact-owned live/WAV probe
 ```
 
 Dependency rule: `link/` knows nothing about audio/STT/LLM. `pipeline.py`
@@ -479,7 +479,7 @@ recorder-shadow diagnostic binds exact `{exchange, controller, UART login
 epoch}` authority. Firmware tees each post-DSP/VAD chunk through a strict
 16 KiB PSRAM SPSC while preserving the WAV outcome. `audio/live.py` validates
 identity, continuity, bounds, CRC, and terminal state on the reader thread.
-`tools/live_pcm_shadow_probe.py` runs an untrimmed exact-owned capture, waits
+`tools/link/live_pcm_shadow_probe.py` runs an untrimmed exact-owned capture, waits
 for live quiescence, fetches the canonical WAV, compares bytes/terminal, and
 cleans up. It is not a production audio source and has not yet run physically.
 

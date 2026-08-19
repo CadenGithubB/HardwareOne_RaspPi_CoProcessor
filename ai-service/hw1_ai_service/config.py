@@ -68,7 +68,7 @@ class AudioConfig:
     # Drop the recorded trailing silence from the WAV without shortening the
     # detection window above. Measured 38% of every capture is silence, and it
     # costs both UART frames and STT time. Set false to get a byte-exact capture
-    # for tools/vad_replay.py, which replays the device's own chunk trace.
+    # for tools/stt/vad_replay.py, which replays the device's own chunk trace.
     # Firmware without the `trim` token ignores it (the arg parser skips
     # unknown trailing words), so this is safe against an older device.
     vad_trim: bool = True
@@ -99,7 +99,7 @@ class SttConfig:
     # the capture AS IT STREAMS and skip the voicefetch round trip; any live
     # failure falls back to the batch engine above, which stays load-bearing.
     # Enabled only when live_model_dir names the exact downloaded streaming
-    # model directory (the one tools/run_native_live_stt_gate.sh validated).
+    # model directory (the one tools/link/run_native_live_stt_gate.sh validated).
     live_enabled: bool = True
     live_model_dir: str = ""
     live_model_arch: str = "medium-streaming"

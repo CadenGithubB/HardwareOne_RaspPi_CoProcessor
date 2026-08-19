@@ -87,7 +87,7 @@ is itself worth knowing before you start measuring.
 | `HW_LINK_DEV` | `ls -l /dev/serial/by-id/` gives a stable name; `dmesg \| grep -i tty` shows what enumerated. |
 | `HW_LINK_BAUD` | Read the *configured* rate from the **firmware** source, not from the host — the host silently accepts a wrong rate and delivers garbage, and `stty -F "$HW_LINK_DEV"` only reports what the host is currently set to. For the *sustainable* rate — the more useful number, and usually the one nobody has measured — run [`uart-baud-test/`](uart-baud-test/README.md) against your board pair. |
 | `HW_MCU` | Your board name plus the firmware version the run used. Version matters: a report without it cannot be compared to the next one. |
-| `HW_PROBE` | Whatever your repo ships for one-shot MCU commands — look in `tools/`. If there is none, every runbook below still works, but you will be driving the link by hand. |
+| `HW_PROBE` | In this repo it is `ai-service/tools/link/g2_evenai_probe.py`, deployed to `~/hw1-ai-service/tools/link/`. On another stack, whatever sends one command and prints the reply; without one the runbooks still work, but you drive the link by hand. |
 | `HW_AUDIO_SRC` | The firmware's mic-source command reports the active one. Do not assume — several of the past surprises were a source that had silently fallen back. |
 | `HW_STT_MODEL` | The `stt` section of `$HW_CFG`, or the model download cache. |
 | `HW_LLM_MODEL` | The `llm` section of `$HW_CFG`, or `ls` the weights directory. |

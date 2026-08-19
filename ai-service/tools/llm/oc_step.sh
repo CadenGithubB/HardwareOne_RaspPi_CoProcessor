@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # oc_step.sh — walk the CM5 up an overclock ladder one rung at a time.
 #
-#   ./tools/oc_step.sh status                 # what is configured vs measured
+#   ./tools/llm/oc_step.sh status                 # what is configured vs measured
 #   sudo -n /usr/local/libexec/hw1-oc-helper stage 2600 0
 #   sudo -n /usr/local/libexec/hw1-oc-helper reboot-try
-#   ./tools/oc_step.sh soak --minutes 15 --expected-mhz 2600 --expected-tryboot 1
-#   ./tools/oc_step.sh ladder                 # every rung tried, and its verdict
+#   ./tools/llm/oc_step.sh soak --minutes 15 --expected-mhz 2600 --expected-tryboot 1
+#   ./tools/llm/oc_step.sh ladder                 # every rung tried, and its verdict
 #
 # Scope note, so this tool is not mistaken for a guaranteed speed win: on Pi 5
 # / CM5 the SDRAM clock is not configurable. Decode may therefore gain much
@@ -37,7 +37,7 @@ OC_POWER_HELPER="/usr/local/libexec/hw1-power-helper"
 OC_FAN_SOCKET="/run/hw1-fan-controller/control.sock"
 OC_LOCK_PATH="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hw1-oc-soak.lock"
 
-OC_BLOCK_BEGIN='# >>> hw1-oc (managed by tools/oc_step.sh) >>>'
+OC_BLOCK_BEGIN='# >>> hw1-oc (managed by tools/llm/oc_step.sh) >>>'
 OC_BLOCK_END='# <<< hw1-oc <<<'
 
 # These are guard rails, not recommendations. Start each rung with no manual
@@ -301,7 +301,7 @@ cmd_set() {
   printf 'Backup: %s\n' "$backup"
   printf '\n--- managed block ---\n'
   sed -n "/^${OC_BLOCK_BEGIN//\//\\/}$/,/^${OC_BLOCK_END//\//\\/}$/p" "$OC_CONFIG_TXT"
-  printf '\nReboot, then: ./tools/oc_step.sh soak\n'
+  printf '\nReboot, then: ./tools/llm/oc_step.sh soak\n'
   printf 'If it will not boot: power off, put the SD card in another machine, and\n'
   printf 'delete the block between the two hw1-oc markers (or restore the backup).\n'
 }

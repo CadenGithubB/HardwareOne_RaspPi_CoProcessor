@@ -29,7 +29,7 @@ TRYBOOT_PATH = Path("/boot/firmware/tryboot.txt")
 STATE_DIR = Path("/var/lib/hw1-oc")
 STATE_PATH = STATE_DIR / "state.json"
 LOCK_PATH = STATE_DIR / "lock"
-BLOCK_BEGIN = "# >>> hw1-oc (managed by tools/oc_step.sh) >>>"
+BLOCK_BEGIN = "# >>> hw1-oc (managed by tools/llm/oc_step.sh) >>>"
 BLOCK_END = "# <<< hw1-oc <<<"
 REBOOT_PATHS = (Path("/usr/sbin/reboot"), Path("/sbin/reboot"))
 
