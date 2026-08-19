@@ -1,12 +1,12 @@
 # HardwareOne — Raspberry Pi CM5 co-processor
 
-The CM5-side companion to the HardwareOne firmware running on a XIAO ESP32-S3.
-One long-lived user daemon speaks the UART link to the XIAO, receives voice and
+The CM5-side companion to the HardwareOne firmware running on an ESP32.
+One long-lived user daemon speaks the UART link to the ESP32, receives voice and
 prompts from it, runs speech-to-text and LLM generation on this host, and
 returns answers to the device's own display surfaces. Two narrowly privileged
 system services own host power and the fan curve.
 
-The firmware itself lives in a **separate repository** and defines every wire
+The ESP32 firmware itself lives in a **separate repository** and defines every wire
 protocol this daemon speaks.
 
 ## Layout
