@@ -26,27 +26,74 @@ that no host, account, device path or model choice is baked into a procedure.
 
 ```bash
 # --- host co-processor (the SBC running the service) ---
-export HW_HOST=              # ip or hostname
-export HW_USER=              # ssh user
-export HW_SERVICE=           # service unit, e.g. hw1-ai-service.service
-export HW_PY=                # interpreter in the service venv
-export HW_CFG=               # service config file
-export HW_EVID_ROOT=         # directory for evidence bundles
+export HW_HOST=              # what you ssh to:  192.168.1.42  |  cm5.local
+export HW_USER=              # ssh account name:  cm5
+export HW_SERVICE=           # systemd unit name:  hw1-ai-service.service
+export HW_PY=                # absolute path to the venv interpreter:
+                             #   /home/cm5/hw1ai/bin/python
+export HW_CFG=               # absolute path to the service config file:
+                             #   /home/cm5/.config/hw1-ai-service/config.yaml
+export HW_EVID_ROOT=         # existing dir with GBs free:  /home/cm5/evidence
 
 # --- the link under test ---
-export HW_LINK_KIND=         # uart | usb-cdc | spi | tcp
-export HW_LINK_DEV=          # host-side device node, e.g. /dev/ttyAMA2
-export HW_LINK_BAUD=         # if serial
+export HW_LINK_KIND=         # exactly one of:  uart | usb-cdc | spi | tcp
+export HW_LINK_DEV=          # host-side node:  /dev/ttyAMA2
+export HW_LINK_BAUD=         # integer, must equal the firmware's:  921600
+                             #   (leave empty when HW_LINK_KIND is not serial)
 
 # --- the microcontroller / peripheral side ---
-export HW_MCU=               # board identifier
-export HW_PROBE=             # host-side probe/CLI entry point for MCU commands
+export HW_MCU=               # free-form label that goes in the report:
+                             #   xiao_s3 @ fw 0.99.82
+export HW_PROBE=             # absolute path to the script that sends one
+                             #   command to the MCU and prints the reply:
+                             #   /home/cm5/hw1-ai-service/tools/probe.py
 
-# --- what is being measured ---
-export HW_AUDIO_SRC=         # pdm | i2s | ble | usb  (where the PCM comes from)
-export HW_STT_MODEL=         # model dir or id
-export HW_LLM_MODEL=         # model file or id
-export HW_RENDER_SINK=       # display target, or none
+# --- what is being measured (set only what the runbook asks for) ---
+export HW_AUDIO_SRC=         # where the PCM originates, one of:
+                             #   pdm | i2s | ble | usb
+export HW_STT_MODEL=         # absolute path to the model directory
+export HW_LLM_MODEL=         # absolute path to the weights file
+export HW_RENDER_SINK=       # label for where text is displayed, or "none"
+```
+
+### Where each value comes from
+
+Run these on the co-processor unless noted. If a lookup returns nothing, that
+is itself worth knowing before you start measuring.
+
+| Variable | How to find it |
+| --- | --- |
+| `HW_HOST` | `hostname -I` for the address, `hostname` for the name. Prefer a stable name over a DHCP address. |
+| `HW_USER` | `whoami` |
+| `HW_SERVICE` | `systemctl --user list-units --type=service` and pick yours. The `.service` suffix is part of the value. |
+| `HW_PY` | `systemctl --user show -p ExecStart "$HW_SERVICE"` — the interpreter is the first path in the command line. |
+| `HW_CFG` | Same `ExecStart` line, usually after `--config`. Otherwise check `~/.config/`. |
+| `HW_EVID_ROOT` | You choose it. `mkdir -p` it, then `df -h` that path — raw packet dumps and WAVs run to hundreds of MB per session. |
+| `HW_LINK_KIND` | How the two boards are physically wired. If you are not sure, you cannot interpret any result below — resolve it first. |
+| `HW_LINK_DEV` | `ls -l /dev/serial/by-id/` gives a stable name; `dmesg \| grep -i tty` shows what enumerated. |
+| `HW_LINK_BAUD` | Read it from the **firmware** source, not from the host — the host silently accepts a wrong rate and delivers garbage. `stty -F "$HW_LINK_DEV"` shows what the host is currently set to, which is not the same question. |
+| `HW_MCU` | Your board name plus the firmware version the run used. Version matters: a report without it cannot be compared to the next one. |
+| `HW_PROBE` | Whatever your repo ships for one-shot MCU commands — look in `tools/`. If there is none, every runbook below still works, but you will be driving the link by hand. |
+| `HW_AUDIO_SRC` | The firmware's mic-source command reports the active one. Do not assume — several of the past surprises were a source that had silently fallen back. |
+| `HW_STT_MODEL` | The `stt` section of `$HW_CFG`, or the model download cache. |
+| `HW_LLM_MODEL` | The `llm` section of `$HW_CFG`, or `ls` the weights directory. |
+| `HW_RENDER_SINK` | The display you are measuring, e.g. the glasses, an OLED page, or `none` for a headless run. |
+
+**Non-systemd hosts:** `HW_SERVICE` and the `systemctl --user` stanzas in the
+runbooks assume systemd. On anything else, put your supervisor's handle for the
+daemon in `HW_SERVICE` and substitute its stop/start commands — the stop,
+restore-on-exit and ownership checks are what matter, not the tool.
+
+### Check the profile before you trust it
+
+```bash
+ssh "$HW_USER@$HW_HOST" true                     || echo "FAIL: ssh"
+ssh "$HW_USER@$HW_HOST" "test -e '$HW_LINK_DEV'" || echo "FAIL: link device"
+ssh "$HW_USER@$HW_HOST" "test -x '$HW_PY'"       || echo "FAIL: interpreter"
+ssh "$HW_USER@$HW_HOST" "test -r '$HW_CFG'"      || echo "FAIL: config"
+ssh "$HW_USER@$HW_HOST" "test -d '$HW_EVID_ROOT'"|| echo "FAIL: evidence dir"
+ssh "$HW_USER@$HW_HOST" "systemctl --user cat '$HW_SERVICE' >/dev/null" \
+                                                 || echo "FAIL: unit name"
 ```
 
 Paste the filled-in profile at the top of every report you write. A number
