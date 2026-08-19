@@ -794,3 +794,108 @@ def test_unrecognized_account_role_cannot_publish_cm5_presence(role):
             firmware.stop()
 
     run(main())
+
+
+def test_busy_is_refcounted_with_named_holders():
+    """STT and a CM5-routed generation overlap freely. Whichever finishes first
+    must NOT drop the SHARED lease back to READY under the other — that stale
+    lease is exactly what makes the firmware abandon a live generation
+    (cm5LlmTick's second wedge check; observed on hardware 2026-08-17)."""
+    async def main() -> None:
+        session = _Session()
+        presence = Cm5Presence(session, interval_s=60)
+        task = asyncio.create_task(presence.run())
+        try:
+            assert await presence.set_mode(Cm5PresenceMode.READY)
+
+            stt = await presence.acquire_busy("stt:moonshine")
+            assert session.calls[-1][0].endswith(" busy")
+            llm = await presence.acquire_busy("llm:tinyllama")
+            assert sorted(presence.busy_reasons) == [
+                "llm:tinyllama", "stt:moonshine"]
+
+            presence.release_busy(stt)
+            assert presence.mode is Cm5PresenceMode.BUSY, \
+                "the generation still needs the wider lease"
+            assert presence.busy_reasons == ("llm:tinyllama",)
+
+            presence.release_busy(llm)
+            assert presence.mode is Cm5PresenceMode.READY
+            assert presence.busy_reasons == ()
+        finally:
+            await _cancel(task)
+
+    run(main())
+
+
+def test_a_fault_outranks_a_remaining_busy_holder():
+    """DEGRADED means this host is impaired. Staying BUSY because a sibling is
+    still working would hide that from every surface."""
+    async def main() -> None:
+        session = _Session()
+        presence = Cm5Presence(session, interval_s=60)
+        task = asyncio.create_task(presence.run())
+        try:
+            assert await presence.set_mode(Cm5PresenceMode.READY)
+            held = await presence.acquire_busy("llm:tinyllama")
+            other = await presence.acquire_busy("stt:moonshine")
+            presence.release_busy(other, fallback=Cm5PresenceMode.DEGRADED)
+            assert presence.mode is Cm5PresenceMode.DEGRADED
+            presence.release_busy(held)
+            assert presence.mode is Cm5PresenceMode.DEGRADED
+        finally:
+            await _cancel(task)
+
+    run(main())
+
+
+def test_link_reset_drops_every_busy_holder():
+    """Each holder's work is bound to the login epoch that just ended, so the
+    refcount must not pin BUSY into the replacement epoch."""
+    async def main() -> None:
+        session = _Session()
+        presence = Cm5Presence(session, interval_s=60)
+        task = asyncio.create_task(presence.run())
+        try:
+            assert await presence.set_mode(Cm5PresenceMode.READY)
+            await presence.acquire_busy("llm:tinyllama")
+            presence.link_reset()
+            assert presence.busy_reasons == ()
+            assert presence.mode is Cm5PresenceMode.STARTING
+        finally:
+            await _cancel(task)
+
+    run(main())
+
+
+def test_heartbeat_reply_tolerates_unknown_trailing_fields():
+    """A firmware that APPENDS a field must not take the daemon down.
+
+    A malformed reply raises LinkClosed, which tears down the task group — and
+    the first heartbeat after reconnect would fail identically, so a strict
+    match turns any additive firmware change into a permanent reconnect loop.
+    The four load-bearing fields stay mandatory and positional.
+    """
+    Cm5Presence._validate_reply(
+        "OK: cm5 heartbeat version=1 seq=4 state=busy "
+        "session_epoch=7 lease_ms=75000 reason=llm:tinyllama,stt:moonshine",
+        4, Cm5PresenceMode.BUSY)
+
+
+def test_heartbeat_reply_still_rejects_a_wrong_answer():
+    """Tolerating a tail must not weaken what the fields actually assert."""
+    for text in (
+        # lease that does not match the requested mode
+        "OK: cm5 heartbeat version=1 seq=4 state=busy "
+        "session_epoch=7 lease_ms=15000",
+        # a field dropped rather than added
+        "OK: cm5 heartbeat version=1 seq=4 state=busy session_epoch=7",
+        # answers a different sequence
+        "OK: cm5 heartbeat version=1 seq=3 state=busy "
+        "session_epoch=7 lease_ms=75000",
+        # session epoch zero is never a valid grant
+        "OK: cm5 heartbeat version=1 seq=4 state=busy "
+        "session_epoch=0 lease_ms=75000",
+    ):
+        with pytest.raises(LinkClosed):
+            Cm5Presence._validate_reply(text, 4, Cm5PresenceMode.BUSY)

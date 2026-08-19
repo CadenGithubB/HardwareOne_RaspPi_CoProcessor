@@ -132,6 +132,24 @@ class LlmConfig:
     startup_timeout_s: float = 120.0
     system_prompt: str = DEFAULT_SYSTEM_PROMPT
     engine: str = "server"             # server | fake
+    # Publish this host's GGUF catalog into the firmware's LLM model registry
+    # and serve `llm_ask` generations over the UART link, so the device's
+    # pickers offer `cm5:<model>` beside their on-device engine. Costs one
+    # command per model at link-up and nothing while idle.
+    serve_firmware: bool = True
+    # Where to look for selectable *.gguf files. Empty = the directory holding
+    # `model`, which is the common single-directory layout and needs no config.
+    # `model` is always offered even when it lives elsewhere.
+    model_dir: str = ""
+    # Deliberately SHORT, and bounded by the CM5 presence lease rather than by
+    # what a slow command might need. Every one of this bridge's commands is a
+    # firmware intrinsic answered ahead of cmd_exec, so a reply is milliseconds;
+    # but they share Session's single command lock with the 5s presence
+    # heartbeat, and the firmware abandons a live generation the moment that
+    # lease goes stale. A long timeout here therefore does not buy patience —
+    # it starves the heartbeat and kills the answer it was waiting for.
+    # test_cm5_llm.py pins the arithmetic against the real presence constants.
+    uart_timeout_s: float = 3.0
 
 
 @dataclass
@@ -311,6 +329,16 @@ def _validate(cfg: "Config") -> None:
         raise ValueError("stt.live_wake_stream_timeout_s must be > 0")
     if cfg.llm.engine not in ("server", "fake", "none"):
         raise ValueError(f"llm.engine = {cfg.llm.engine!r} (server|fake|none)")
+    # Ceiling derived from cm5_presence: worst case is one command timeout plus
+    # its idempotent replay (2x) holding the shared Session lock, and the 5s
+    # heartbeat must still land inside the 15s normal lease — (15 - 5) / 2.
+    # Above this, one stuck push starves the heartbeat and the firmware
+    # abandons the generation with "session epoch mismatch".
+    if (not math.isfinite(cfg.llm.uart_timeout_s) or
+            not 0 < cfg.llm.uart_timeout_s <= 5.0):
+        raise ValueError(
+            "llm.uart_timeout_s must be in (0, 5]: two of them plus the 5s CM5 "
+            "presence heartbeat have to fit inside the firmware's 15s lease")
     if (cfg.stt.engine == "none" and cfg.llm.engine == "none" and
             not cfg.power.enabled and not cfg.fan.enabled):
         raise ValueError("stt.engine and llm.engine are both 'none' and "

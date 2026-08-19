@@ -72,6 +72,24 @@ llm:
   # important, 6 or 4 is a reversible latency/context tradeoff to benchmark
   # after verifying llama-server's actual prompt-cache reuse.
   history_turns: 8
+  # Publish this host's GGUF catalog into the XIAO's LLM model registry and
+  # serve its `llm_ask` generations, so every surface (web, OLED, G2, BLE, CLI)
+  # offers `cm5:<model>` beside the on-device engine. Costs one command per
+  # model at link-up and nothing while idle. See ARCHITECTURE.md 3 / cm5_llm.py.
+  serve_firmware: true
+  # Which *.gguf files are selectable from the device. Empty = the directory
+  # holding `model` above, which is the usual single-directory layout; `model`
+  # is always offered even if it lives somewhere else. The firmware's registry
+  # holds 8 rows, so extras are dropped with a log line rather than silently.
+  model_dir: /opt/models
+  # UART timeout for the LLM bridge's own commands. Deliberately SHORT, and
+  # bounded by the CM5 presence lease rather than by patience: every command
+  # here is a firmware intrinsic answered ahead of cmd_exec, so a reply is
+  # milliseconds — but they share one command lock with the 5s heartbeat, and
+  # the firmware abandons a live generation the moment that 15s lease goes
+  # stale. Measured the hard way on 2026-08-17: at 20s a single slow push
+  # starved the heartbeat and killed the answer it was waiting for. Max 5.
+  uart_timeout_s: 3.0
   # Static, truthful capability contract. Keep this synchronized with the
   # default in hw1_ai_service/config.py so prompt-prefix caching remains useful.
   system_prompt: >-

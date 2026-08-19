@@ -9,6 +9,7 @@ unexpected exit triggers backoff restart.
 from __future__ import annotations
 
 import asyncio
+import os
 import logging
 
 import httpx
@@ -16,6 +17,9 @@ import httpx
 from ..config import LlmConfig
 
 log = logging.getLogger("llm.server")
+
+
+_PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
 
 
 class LlamaServerSupervisor:
@@ -39,6 +43,90 @@ class LlamaServerSupervisor:
         self._stopping = False
         await self._spawn()
         self._monitor = asyncio.create_task(self._monitor_main(), name="llama-monitor")
+
+    @property
+    def model_path(self) -> str:
+        return self._cfg.model
+
+    def load_residency(self) -> tuple[int, int] | None:
+        """(resident_bytes, model_bytes) for the loading child, or None.
+
+        This is THE measurable signal for load progress, and it is an OS
+        measurement rather than anything llama.cpp reports. llama.cpp maps the
+        GGUF with mmap(MAP_POPULATE) (src/llama-mmap.cpp), so the entire load is
+        one blocking syscall that emits nothing: the loader's own progress
+        callback fires afterwards, over a pointer-assignment loop with no I/O,
+        and races 0->100% in well under a second. Its stderr dot-printer is
+        installed only when no callback is set, and the server always sets one.
+        Residency is the only thing that moves during the wait.
+
+        MEASURED on the CM5, cold, 2026-08-18: resident climbs near-linearly at
+        ~82 MB/s, reaching the GGUF's size at 45.1s of a 47.1s total wall time
+        (the remaining ~2s is KV/compute-buffer allocation plus warmup, which
+        nothing observes). Residency overshoots the file size at the end -- it
+        peaked at 107% -- because those buffers and the binary itself are
+        resident too, so callers must clamp.
+
+        /proc/<pid>/io read_bytes is deliberately NOT used: it is blind to mmap
+        population on a warm cache (measured flat at 4 MB while 3.7 GB became
+        resident) and undercounts by ~43% even when cold. Residency is correct
+        in both regimes, so a max() of the two would only ever return residency.
+        """
+        proc = self._proc
+        if proc is None or proc.returncode is not None:
+            return None
+        try:
+            size = os.path.getsize(self._cfg.model)
+        except OSError:
+            return None
+        try:
+            with open(f"/proc/{proc.pid}/statm", "r") as fh:
+                resident_pages = int(fh.read().split()[1])
+        except (OSError, IndexError, ValueError):
+            # The child can exit between the liveness check and the read; a
+            # missing /proc entry is that race, not an error worth logging.
+            return None
+        return resident_pages * _PAGE_SIZE, size
+
+    async def healthy(self, timeout: float = 2.0) -> bool:
+        """One bounded /health probe. False on any transport or status failure."""
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(f"{self.base_url}/health")
+                return resp.status_code == 200
+        except httpx.HTTPError:
+            return False
+
+    async def switch_model(self, path: str) -> bool:
+        """Restart the child on a different GGUF; True once it is serving it.
+
+        A failed switch restores the previous model and starts it again, so a
+        bad pick degrades to "the old model still works" rather than "the LLM
+        is gone". The caller is expected to report whatever ends up loaded —
+        the firmware treats this host as authoritative about that.
+        """
+        if not self._cfg.server_bin:
+            raise RuntimeError(
+                "external-server mode cannot switch models (llm.server_bin is unset)")
+        previous = self._cfg.model
+        if path == previous and await self.healthy():
+            return True
+        await self.stop()
+        self._cfg.model = path
+        try:
+            await self.start()
+            return True
+        except Exception as exc:
+            log.error("model switch to %s failed: %s — restoring %s",
+                      path, exc, previous)
+            await self.stop()
+            self._cfg.model = previous
+            try:
+                await self.start()
+            except Exception as restore_exc:
+                log.error("could not restore %s either: %s",
+                          previous, restore_exc)
+            return False
 
     async def stop(self) -> None:
         self._stopping = True

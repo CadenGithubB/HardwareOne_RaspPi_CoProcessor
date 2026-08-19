@@ -36,12 +36,21 @@ class LlmClient:
         self._history.clear()
 
     async def ask_stream(self, prompt: str, *,
-                         commit_history: bool = True) -> AsyncIterator[str]:
+                         commit_history: bool = True,
+                         max_tokens: int | None = None,
+                         temperature: float | None = None,
+                         top_p: float | None = None) -> AsyncIterator[str]:
         """Yield answer deltas and optionally commit the completed turn.
 
         Native EvenAI uses ``commit_history=False`` and commits only after its
         correlated display transaction succeeds. A wearer-dismissed answer
         therefore cannot silently bias the next exchange.
+
+        The sampling overrides exist for turns the FIRMWARE owns: a CM5-routed
+        `llm_ask` carries the device's centrally clamped maxTokens/temperature/
+        top_p, and silently ignoring them would void the shared override
+        contract that the web and BLE surfaces rely on. Local callers pass
+        nothing and keep the configured defaults.
         """
         messages = [{"role": "system", "content": self._cfg.system_prompt}]
         for user, assistant in self._history:
@@ -51,7 +60,8 @@ class LlmClient:
 
         body = {
             "messages": messages,
-            "max_tokens": self._cfg.max_tokens,
+            "max_tokens": (self._cfg.max_tokens if max_tokens is None
+                           else max_tokens),
             "stream": True,
             "cache_prompt": True,
             # Qwen3-style thinking burns the token budget invisibly before
@@ -62,6 +72,10 @@ class LlmClient:
             # switch simply ignore the kwarg, so this is model-safe.
             "chat_template_kwargs": {"enable_thinking": False},
         }
+        if temperature is not None:
+            body["temperature"] = temperature
+        if top_p is not None:
+            body["top_p"] = top_p
         answer_parts: list[str] = []
         # Prefill and decode are bound by different things — prefill is
         # compute-bound (tracks CPU clock), decode is memory-bandwidth-bound —

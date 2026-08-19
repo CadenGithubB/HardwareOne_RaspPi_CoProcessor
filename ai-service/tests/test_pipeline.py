@@ -93,6 +93,14 @@ def test_reboot_probation_rearms_before_ready_and_cleanup_is_nonblocking():
             events.append(f"presence_nowait_{mode.value}")
             return 1
 
+        async def acquire_busy(self, reason: str) -> int:
+            events.append(f"presence_acquire_{reason}")
+            return 1
+
+        def release_busy(self, token: int, *, fallback=None) -> None:
+            name = getattr(fallback, "value", fallback)
+            events.append(f"presence_release_{token}_{name}")
+
     class SourceStub:
         def evenai_done(self, _exchange_id: str) -> None:
             raise AssertionError("chat jobs have no EvenAI owner")
@@ -113,10 +121,13 @@ def test_reboot_probation_rearms_before_ready_and_cleanup_is_nonblocking():
         finally:
             await pipeline.close()
 
+        # The job takes a NAMED share of the busy lease and releases exactly
+        # that share, so a concurrent CM5-routed generation keeps the lease it
+        # still needs instead of being dropped back to READY under it.
         assert events == [
             "presence_starting", "presence_await_starting", "live_reset",
             "quiet", "clear_reboot", "settled", "live_armed",
-            "presence_await_busy", "job", "presence_nowait_ready",
+            "presence_acquire_voice:chat", "job", "presence_release_1_ready",
         ]
 
     run(main())

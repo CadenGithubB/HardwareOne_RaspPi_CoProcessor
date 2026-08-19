@@ -10,7 +10,12 @@ class FakeLlm:
     def __init__(self) -> None:
         self.prompts: list[str] = []
 
-    async def ask_stream(self, prompt: str) -> AsyncIterator[str]:
+    async def ask_stream(self, prompt: str, *, commit_history: bool = True,
+                         max_tokens: int | None = None,
+                         temperature: float | None = None,
+                         top_p: float | None = None) -> AsyncIterator[str]:
+        # Accepts (and ignores) the real client's per-turn overrides so a
+        # firmware-owned `llm_ask` can run against llm.engine: fake.
         self.prompts.append(prompt)
         for word in f"echo: {prompt}".split(" "):
             await asyncio.sleep(0)
