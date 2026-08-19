@@ -9,7 +9,7 @@
 #   CM5_HOST=x.x.x.x ./deploy_cm5.sh --verify  # temporary DHCP override
 #   CM5_USER=name ./deploy_cm5.sh --verify      # alternate SSH account
 #
-# Canonical paths per CM5_DEPLOYMENT_PATHS.md: trailing slashes are load-
+# Canonical paths per docs/CM5_DEPLOYMENT_PATHS.md: trailing slashes are load-
 # bearing (contents of the one Mac source dir into the one Pi source dir),
 # and --delete is deliberately absent.
 set -euo pipefail
@@ -75,6 +75,7 @@ if [ "$RUN_DEPLOY" -eq 1 ]; then
 
     echo
     echo "Synced. On the Pi:"
+    echo "  ./hw1-ai-service/bootstrap.sh    # first install, or after adding a helper"
     echo "  systemctl --user restart hw1-ai-service.service"
     echo "  systemctl --user show hw1-ai-service.service -p ActiveState -p SubState -p NRestarts -p WatchdogTimestampMonotonic"
     echo "  # If journald is available: journalctl --user -u hw1-ai-service.service -n 40 --no-pager"
@@ -86,11 +87,11 @@ if [ "$VERIFY" -eq 1 ]; then
     ssh "$CM5_SSH" '
         set -e
         test -x "$HOME/hw1ai/bin/python" || {
-          echo "ERROR: missing $HOME/hw1ai/bin/python; refresh the CM5 environment" >&2
+          echo "ERROR: missing $HOME/hw1ai/bin/python; run ~/hw1-ai-service/bootstrap.sh" >&2
           exit 1
         }
         test -x "$HOME/hw1ai/bin/hw1-ai-service" || {
-          echo "ERROR: missing $HOME/hw1ai/bin/hw1-ai-service; run the editable install" >&2
+          echo "ERROR: missing $HOME/hw1ai/bin/hw1-ai-service; run ~/hw1-ai-service/bootstrap.sh" >&2
           exit 1
         }
         test -r "$HOME/.config/hw1-ai-service/config.yaml" || {
@@ -98,7 +99,7 @@ if [ "$VERIFY" -eq 1 ]; then
           exit 1
         }
         test -f "$HOME/.config/systemd/user/hw1-ai-service.service" || {
-          echo "ERROR: missing installed user unit under $HOME/.config/systemd/user" >&2
+          echo "ERROR: missing user unit; run ~/hw1-ai-service/bootstrap.sh" >&2
           exit 1
         }
         package_path=$("$HOME/hw1ai/bin/python" -c \
@@ -120,11 +121,11 @@ if [ "$VERIFY" -eq 1 ]; then
         }
         cmp -s "$HOME/hw1-ai-service/systemd/hw1-ai-service.service" \
           "$HOME/.config/systemd/user/hw1-ai-service.service" || {
-          echo "ERROR: installed user unit differs from the synced tracked unit; run the CM5 environment refresh" >&2
+          echo "ERROR: installed user unit differs from the synced tracked unit; run ~/hw1-ai-service/bootstrap.sh" >&2
           exit 1
         }
         [ "$(systemctl --user show hw1-ai-service.service -p NeedDaemonReload --value)" = no ] || {
-          echo "ERROR: systemd requires daemon-reload; run the CM5 environment refresh" >&2
+          echo "ERROR: systemd requires daemon-reload; run ~/hw1-ai-service/bootstrap.sh" >&2
           exit 1
         }
         systemctl --user restart hw1-ai-service.service

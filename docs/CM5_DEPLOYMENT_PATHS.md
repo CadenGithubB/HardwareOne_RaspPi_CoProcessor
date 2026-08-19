@@ -385,6 +385,11 @@ find "$CANCEL_PULL_DIR" -maxdepth 2 -type f -print
 
 ## Install or refresh the CM5 environment
 
+`ai-service/bootstrap.sh` performs this sequence, plus the UART overlay, group
+membership, lingering, model-directory and privileged-helper steps that the
+block below leaves to the operator. Prefer it for a new device; the block
+remains the reference for what a refresh does and for hand-running one step.
+
 Run on the CM5 after syncing. This refresh deliberately requires the existing
 live config and UART credentials; it never creates or overwrites either one.
 It stops the daemon before changing its environment and remains stopped if a
