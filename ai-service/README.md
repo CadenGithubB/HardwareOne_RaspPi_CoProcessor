@@ -4,8 +4,8 @@ CM5-side AI companion for hardwareone: speaks the UART link to the XIAO,
 runs speech-to-text and LLM generation on the CM5 (both resident in one
 program), and returns answers to the device's display surfaces.
 
-- Program architecture: [../ARCHITECTURE.md](../ARCHITECTURE.md)
-- Canonical CM5 paths and sync commands: [../CM5_DEPLOYMENT_PATHS.md](../CM5_DEPLOYMENT_PATHS.md)
+- Program architecture: [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)
+- Canonical CM5 paths and sync commands: [../docs/CM5_DEPLOYMENT_PATHS.md](../docs/CM5_DEPLOYMENT_PATHS.md)
 - Investigation runbooks: [../docs/investigations/](../docs/investigations/README.md)
 
 Current state: the service supports manual voice/chat plus the firmware-owned
@@ -380,7 +380,7 @@ configured/effective link rates must be at least 921600 baud. A successful run
 validates the synthetic UART path only; it is not evidence about either mic,
 recorder timing, SD/WAV parity, Moonshine latency, or lens behavior. See the
 canonical evidence-capture form in
-[../CM5_DEPLOYMENT_PATHS.md](../CM5_DEPLOYMENT_PATHS.md#synthetic-live-pcm-transport-probe).
+[../docs/CM5_DEPLOYMENT_PATHS.md](../docs/CM5_DEPLOYMENT_PATHS.md#synthetic-live-pcm-transport-probe).
 
 ## Recorder-shadow PCM/WAV probe
 
@@ -467,7 +467,7 @@ drops/inbox faults/late frames; the independent canonical trimmed WAV was
 and final `mutex_drop=0 decode_fail=0`. This is a single no-STT provenance
 smoke, not latency or production-streaming evidence. See the canonical
 capture, acceptance, and regression steps in
-[../CM5_DEPLOYMENT_PATHS.md](../CM5_DEPLOYMENT_PATHS.md#native-hey-even-no-stt-recorder-shadow-smoke).
+[../docs/CM5_DEPLOYMENT_PATHS.md](../docs/CM5_DEPLOYMENT_PATHS.md#native-hey-even-no-stt-recorder-shadow-smoke).
 
 ## Paced Moonshine replay diagnostic
 
@@ -506,7 +506,7 @@ Pi worker queue eight chunks and raises its queue-age ceiling to 1024 ms; its
 physical 0.5- and 1.0-second reruns preserved every input chunk. Contract v3
 adds the four confirmed no-speech controls without changing the XIAO or
 UART-inbox queues. Use the guarded command and acceptance fields in
-[../CM5_DEPLOYMENT_PATHS.md](../CM5_DEPLOYMENT_PATHS.md#real-time-paced-moonshine-replay).
+[../docs/CM5_DEPLOYMENT_PATHS.md](../docs/CM5_DEPLOYMENT_PATHS.md#real-time-paced-moonshine-replay).
 
 The physical v3 mixed-slice evidence is retained at
 `.scratch/gate0a-v3-results-Pn5hEAy0`. At 0.5 seconds, streaming and batch each

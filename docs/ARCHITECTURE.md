@@ -7,11 +7,10 @@
 > G2 delivery. A default-off exact-owner recorder-shadow transport and
 > standalone live/WAV parity probe are implemented, but no physical shadow run
 > has occurred and production streaming STT remains unimplemented. Use
-> [`ai-service/README.md`](ai-service/README.md) for current operations,
-> [`../docs/G2_NATIVE_EVENAI_SESSION.md`](../docs/G2_NATIVE_EVENAI_SESSION.md)
-> for the current wire/lifecycle contract, and
-> [`LIVE_STT_G2_EXECUTION_PLAN.md`](LIVE_STT_G2_EXECUTION_PLAN.md) for future
-> live-STT work.
+> [`ai-service/README.md`](../ai-service/README.md) for current operations,
+> `docs/G2_NATIVE_EVENAI_SESSION.md` **in the firmware repository** for the
+> current wire/lifecycle contract, and the local live-STT execution plan
+> (untracked) for future live-STT work.
 
 The CM5-side companion program: one long-lived user daemon that speaks the UART
 link, provides independent Linux power and fan-control bridges, receives
@@ -28,7 +27,7 @@ This document is the program-level design. The system-level plan that preceded
 it (why UART, firmware gaps, phasing, decisions) and the adversarial audit that
 hardened it were session records for one specific rig; they are kept locally
 rather than tracked here. The reusable procedures distilled from that work are
-in [`docs/investigations/`](docs/investigations/README.md). Code lives in
+in [`docs/investigations/`](investigations/README.md). Code lives in
 `ai-service/`.
 
 Historical scope note: everything below targets **P0 — the walking skeleton** that runs
