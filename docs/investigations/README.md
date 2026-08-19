@@ -17,6 +17,18 @@ question.
 | [stt-benchmark.md](stt-benchmark.md) | Which engine/cadence, and does it hallucinate on silence? |
 | [llm-serving.md](llm-serving.md) | Tokens/s, time-to-first-token, and does it hold under thermal load? |
 | [render-timing.md](render-timing.md) | When did the wearer/viewer actually see the text? |
+| [`uart-baud-test/`](../../uart-baud-test/README.md) | What is the highest link rate this board pair sustains with zero corruption? |
+
+The last one is different in kind: it is not a procedure to follow but a
+harness to **run** — a controller script plus a standalone ESP-IDF test
+firmware, living outside this directory because it is code, not prose. It is
+worth reading even if you never run it, because it is the worked example of
+most of the method below: CRC32-framed sequence-numbered traffic, per-direction
+error attribution, a `UNSUPPORTED` grade kept distinct from `FAIL` so a rate the
+kernel silently clamped is never confused with a link that failed, self-
+describing JSON results for comparing hardware revisions, and a `sim_xiao.py`
+software stand-in that validates the tool's own logic without claiming to
+validate electrical reality.
 
 ## 1. The hardware profile
 
@@ -71,7 +83,7 @@ is itself worth knowing before you start measuring.
 | `HW_EVID_ROOT` | You choose it. `mkdir -p` it, then `df -h` that path — raw packet dumps and WAVs run to hundreds of MB per session. |
 | `HW_LINK_KIND` | How the two boards are physically wired. If you are not sure, you cannot interpret any result below — resolve it first. |
 | `HW_LINK_DEV` | `ls -l /dev/serial/by-id/` gives a stable name; `dmesg \| grep -i tty` shows what enumerated. |
-| `HW_LINK_BAUD` | Read it from the **firmware** source, not from the host — the host silently accepts a wrong rate and delivers garbage. `stty -F "$HW_LINK_DEV"` shows what the host is currently set to, which is not the same question. |
+| `HW_LINK_BAUD` | Read the *configured* rate from the **firmware** source, not from the host — the host silently accepts a wrong rate and delivers garbage, and `stty -F "$HW_LINK_DEV"` only reports what the host is currently set to. For the *sustainable* rate — the more useful number, and usually the one nobody has measured — run [`uart-baud-test/`](../../uart-baud-test/README.md) against your board pair. |
 | `HW_MCU` | Your board name plus the firmware version the run used. Version matters: a report without it cannot be compared to the next one. |
 | `HW_PROBE` | Whatever your repo ships for one-shot MCU commands — look in `tools/`. If there is none, every runbook below still works, but you will be driving the link by hand. |
 | `HW_AUDIO_SRC` | The firmware's mic-source command reports the active one. Do not assume — several of the past surprises were a source that had silently fallen back. |

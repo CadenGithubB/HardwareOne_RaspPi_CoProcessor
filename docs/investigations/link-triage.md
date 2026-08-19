@@ -13,6 +13,15 @@ delivery cadence and (b) a sequence counter on the wire. BLE connection interval
 is the worked example; the same structure fits USB polling intervals, Wi-Fi
 power-save beacons, or a UART with flow control.
 
+**Assumes the link rate itself is sound.** Everything below diagnoses *delivery*
+over a link that basically works. If the underlying rate is marginal — corruption
+that comes and goes, errors that scale with throughput rather than with what the
+peripheral is doing — that is a different question, and it has a harness rather
+than a runbook: [`uart-baud-test/`](../../uart-baud-test/README.md) sweeps rates
+with CRC32-framed, sequence-numbered traffic and grades each one PASS /
+MARGINAL / FAIL / UNSUPPORTED per direction. Settle that before spending a
+session on cadence.
+
 ## 1. The hypothesis pair
 
 | | **H-late** — coalescing | **H-loss** — real frame loss |
@@ -136,6 +145,13 @@ needs instead of letting it fire and fail.
 two consumers with different requirements, an adequate-for-audio interval gets
 flagged slow and triggers pointless re-requests. Give each consumer its own
 threshold.
+
+**E — buy margin at the wire (serial links).** If the fix is to slow the rate or
+add stop bits, do not guess at the new value: sweep it. `uart-baud-test` grades a
+candidate rate MARGINAL on a nonzero byte-error rate *below* its failure
+threshold, which is exactly the regime that ships and then bites — and it soaks
+the survivors, on the principle that a rate is only trustworthy at the duration
+you actually tested.
 
 ## 6. What a run cannot tell you
 
