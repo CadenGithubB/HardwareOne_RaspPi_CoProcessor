@@ -41,10 +41,10 @@ directory. Remote paths are written `/home/$CM5_USER/...`.
 `/home/$CM5_USER/hw1ai` is a virtual environment, not another source checkout.
 The only current CM5 source directory is `/home/$CM5_USER/hw1-ai-service`.
 
-`cm5/deploy_cm5.sh` defaults to `$CM5_USER@$CM5_HOST`, so normal DHCP address changes
+`deploy.sh` defaults to `$CM5_USER@$CM5_HOST`, so normal DHCP address changes
 need no repository edit. Override the host or account for one invocation with
 `CM5_HOST=$CM5_HOST` or `CM5_USER=another-user` if needed.
-After a sync has already completed, `cm5/deploy_cm5.sh --verify-only` reruns
+After a sync has already completed, `deploy.sh --verify-only` reruns
 only the remote health check. On images without journal storage, that check
 uses the live user control socket together with an unchanged PID/restart count
 and an advancing systemd watchdog instead of requiring journal records.
