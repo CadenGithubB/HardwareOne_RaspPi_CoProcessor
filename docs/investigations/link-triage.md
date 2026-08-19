@@ -17,7 +17,7 @@ power-save beacons, or a UART with flow control.
 over a link that basically works. If the underlying rate is marginal — corruption
 that comes and goes, errors that scale with throughput rather than with what the
 peripheral is doing — that is a different question, and it has a harness rather
-than a runbook: [`uart-baud-test/`](../../uart-baud-test/README.md) sweeps rates
+than a runbook: [`uart-baud-test/`](uart-baud-test/README.md) sweeps rates
 with CRC32-framed, sequence-numbered traffic and grades each one PASS /
 MARGINAL / FAIL / UNSUPPORTED per direction. Settle that before spending a
 session on cadence.

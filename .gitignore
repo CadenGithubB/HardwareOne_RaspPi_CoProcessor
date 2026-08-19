@@ -1,4 +1,5 @@
-# Build output — uart-baud-test/firmware is an ESP-IDF build tree (~141 MB)
+# Build output — docs/investigations/uart-baud-test/firmware is an ESP-IDF
+# build tree (~141 MB)
 firmware/
 build/
 build-*/

@@ -5,8 +5,7 @@ CM5 + XIAO hardware combination can sustain reliably, for an extended period,
 with essentially zero data corruption?**
 
 Part of the investigation set in
-[`docs/investigations/`](../docs/investigations/README.md) — the one you run
-rather than follow.
+[`docs/investigations/`](../README.md) — the one you run rather than follow.
 
 The Raspberry Pi CM5 is the test controller (`uart_baud_test.py`). The XIAO
 runs a dedicated test firmware (`firmware/`). For every requested rate the
