@@ -64,8 +64,23 @@ pytest -m slow            # + the reader-stall soak
 
 ## Pi 5 / CM5 install
 
-The following is a **fresh-install-only** bootstrap. It deliberately refuses
-to overwrite an existing credential or tuned configuration file.
+`./bootstrap.sh` does all of this on the device and is re-runnable — it checks
+before every action, overwrites nothing, and stops with a TODO list rather than
+guessing at the two things it must not do for you (invent a UART credential,
+download model weights). Run it as the service account once the tree is there:
+
+```bash
+~/hw1-ai-service/bootstrap.sh --dry-run   # print the plan
+~/hw1-ai-service/bootstrap.sh             # do it
+```
+
+It detects the board from `/proc/device-tree/model`. Pi 5 and CM5 need the same
+overlay and the same device node; the only thing that genuinely differs is
+whether a kernel `pwmfan` topology exists for the fan controller to own, so
+that install is conditional on finding exactly one.
+
+The manual sequence it automates follows. It is **fresh-install-only** and
+deliberately refuses to overwrite an existing credential or tuned config.
 
 ```bash
 set -e
