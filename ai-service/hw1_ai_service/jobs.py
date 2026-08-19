@@ -238,7 +238,7 @@ class ManualTrigger:
 
 
 def route_link_event(payload: bytes, trigger: ManualTrigger, session=None,
-                     power=None, fan=None) -> None:
+                     power=None, fan=None, cm5_llm=None) -> None:
     """EVT frame payloads from the firmware -> jobs. Payloads are short ASCII:
     an event name plus optional space-separated args.
     Called from Session.on_event on the loop thread — must stay non-blocking."""
@@ -247,6 +247,12 @@ def route_link_event(payload: bytes, trigger: ManualTrigger, session=None,
     if fan is not None and fan.submit_event(payload):
         return
     if power is not None and power.submit_event(payload):
+        return
+    # The LLM bridge must see the payload BEFORE the strict-ASCII decode below.
+    # An `llm_ask` prompt carries whatever the wearer typed or said, and one
+    # curly apostrophe from a phone keyboard would lose the entire prompt here
+    # with nothing but a log line — no error and no timeout on either side.
+    if cm5_llm is not None and cm5_llm.submit_event(payload):
         return
     try:
         text = payload.decode("ascii").strip()

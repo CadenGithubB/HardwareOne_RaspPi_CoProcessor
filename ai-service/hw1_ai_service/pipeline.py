@@ -322,9 +322,7 @@ class VoicePipeline:
         wav.require_canonical(parsed)
         self._report_audio(wav_bytes, parsed)
 
-        loop = asyncio.get_running_loop()
-        transcript = await loop.run_in_executor(
-            self._stt_pool, self._stt.transcribe, parsed.pcm, parsed.rate)
+        transcript = await self._transcribe(parsed)
         t_stt = time.monotonic()
         log.info("transcript: %r", transcript)
         if not transcript.strip():
@@ -447,12 +445,10 @@ class VoicePipeline:
             wav.require_canonical(parsed)
             self._report_audio(wav_bytes, parsed, persist=False)
 
-            loop = asyncio.get_running_loop()
             stt_tap = self._start_tap_window(exchange, "stt")
             stt_outcome = "interrupted"
             try:
-                transcript = await loop.run_in_executor(
-                    self._stt_pool, self._stt.transcribe, parsed.pcm, parsed.rate)
+                transcript = await self._transcribe(parsed)
                 stt_outcome = "stt_complete"
             finally:
                 self._stop_tap_window(stt_tap, stt_outcome)
@@ -699,6 +695,27 @@ class VoicePipeline:
             log.info("empty transcript — capture kept: %s", dest)
         except OSError as exc:
             log.warning("could not archive failed utterance: %s", exc)
+
+    async def _transcribe(self, parsed) -> str:
+        """Run batch STT off the loop under its own presence marker.
+
+        Native inference pins a core for seconds, which is the other reason
+        this host goes slow. The firmware's heartbeat vocabulary is closed at
+        starting|ready|busy|degraded, so the distinction cannot ride the wire —
+        but the host log can say `stt:<engine>` rather than a bare "busy",
+        which is the difference between reading a trace and guessing at it.
+        """
+        loop = asyncio.get_running_loop()
+        if self._cm5_presence is None:
+            return await loop.run_in_executor(
+                self._stt_pool, self._stt.transcribe, parsed.pcm, parsed.rate)
+        token = await self._cm5_presence.acquire_busy(
+            f"stt:{self._cfg.stt.engine}")
+        try:
+            return await loop.run_in_executor(
+                self._stt_pool, self._stt.transcribe, parsed.pcm, parsed.rate)
+        finally:
+            self._cm5_presence.release_busy(token)
 
     def _report_audio(self, wav_bytes: bytes, parsed, *, persist: bool = True) -> None:
         """Level readout + save-to-disk: the two diagnostics that separate
@@ -1089,6 +1106,7 @@ class VoicePipeline:
 
         power_started = False
         presence_busy = False
+        presence_token: int | None = None
         try:
             if job.kind == "evenai" and job.exchange is None:
                 log.warning("dropping uncorrelated evenai job")
@@ -1110,7 +1128,8 @@ class VoicePipeline:
                     return
                 job.exchange.raise_if_cancelled()
             if self._cm5_presence is not None:
-                await self._cm5_presence.set_mode(Cm5PresenceMode.BUSY)
+                presence_token = await self._cm5_presence.acquire_busy(
+                    f"voice:{job.kind}")
                 presence_busy = True
             if self._power_activity is not None:
                 await self._power_activity.activity_started()
@@ -1163,12 +1182,16 @@ class VoicePipeline:
             finally:
                 if ((presence_busy or presence_recovering) and
                         self._cm5_presence is not None):
-                    if cleanup_succeeded:
-                        # Do not await a sibling actor during TaskGroup
-                        # cancellation. Remaining BUSY until the actor sends
-                        # this edge is fail-closed for new G2 admissions.
-                        self._cm5_presence.set_mode_nowait(
-                            Cm5PresenceMode.READY)
+                    # Do not await a sibling actor during TaskGroup
+                    # cancellation. Remaining BUSY until the actor sends this
+                    # edge is fail-closed for new G2 admissions.
+                    fallback = (Cm5PresenceMode.READY if cleanup_succeeded
+                                else Cm5PresenceMode.DEGRADED)
+                    if presence_token is not None:
+                        # Releases only THIS job's share: a CM5-routed
+                        # generation running alongside keeps the lease it is
+                        # relying on, and only a fault jumps the refcount.
+                        self._cm5_presence.release_busy(
+                            presence_token, fallback=fallback)
                     else:
-                        self._cm5_presence.set_mode_nowait(
-                            Cm5PresenceMode.DEGRADED)
+                        self._cm5_presence.set_mode_nowait(fallback)

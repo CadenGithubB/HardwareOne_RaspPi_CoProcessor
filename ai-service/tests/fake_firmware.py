@@ -33,6 +33,32 @@ import time
 
 TEST_EVENAI_ID = "a1b2c3d400000001"
 
+# Transcriptions of cm5LlmUnescape / cm5LlmEscape (System_LLMCm5.cpp). The
+# firmware is the only encoder for inbound payloads and the only decoder for
+# outbound ones, so the double owns both halves here — same reason
+# _cobs_encode lives in this file. Importing the client's implementation would
+# make the round-trip and byte-exactness tests agree with themselves.
+_LLM_UNESCAPE = {"n": "\n", "r": "\r", "t": "\t", "s": " ", "\\": "\\"}
+_LLM_ESCAPE = {"\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t", " ": "\\s"}
+
+
+def llm_unescape(text: str) -> str:
+    out = []
+    i = 0
+    while i < len(text):
+        if text[i] != "\\" or i + 1 >= len(text):
+            out.append(text[i])
+            i += 1
+            continue
+        # Unknown escape yields the character itself, never a dropped byte.
+        out.append(_LLM_UNESCAPE.get(text[i + 1], text[i + 1]))
+        i += 2
+    return "".join(out)
+
+
+def llm_escape(text: str) -> str:
+    return "".join(_LLM_ESCAPE.get(ch, ch) for ch in text)
+
 
 def _cobs_encode(src: bytes) -> bytes:
     """Mirror of the firmware's uartCobsEncode (System_UartLink.cpp). The
@@ -133,6 +159,28 @@ class FakeFirmware:
         self.evenai_stream_speeds: list[int] = []
         self.cm5_power_acks: list[tuple[str, str]] = []
         self.cm5_power_reports: list[tuple[str, str, str, str]] = []
+        # CM5-as-LLM-source double (System_LLMCm5.cpp). The catalog is eight
+        # fixed slots plus a count, exactly like sCatalog/sCatalogCount, so a
+        # shrinking host catalog is observable rather than silently merged.
+        self.cm5_llm_catalog: list[tuple[str, int] | None] = [None] * 8
+        self.cm5_llm_count = 0
+        self.cm5_llm_gen = 0
+        self.cm5_llm_active: str | None = None
+        self.cm5_llm_host_ready = False
+        self.cm5_llm_session = 0
+        self.cm5_llm_gen_epoch = 0
+        self.cm5_llm_expect_seq = 0
+        self.cm5_llm_text = ""
+        self.cm5_llm_done = True
+        self.cm5_llm_pushes: list[tuple[int, int]] = []
+        self.cm5_llm_ends: list[tuple[int, str, int, int]] = []
+        self.cm5_llm_selects: list[str] = []
+        # {seq: seconds}: block the handler thread before replying to that
+        # push, exactly like a busy cmd_exec delays a real reply. The push is
+        # still APPLIED, so the host's retry is a genuine duplicate delivery
+        # rather than a re-send of something the device never saw.
+        self.cm5_llm_push_delay: dict[int, float] = {}
+        self._llm_next_session = 0
         self.cm5_fan_acks: list[tuple[str, str]] = []
         self.cm5_fan_reports: list[
             tuple[str, str, str, int, int, int, int, str]
@@ -329,11 +377,15 @@ class FakeFirmware:
     # -- EvenAI wake double --------------------------------------------------
 
     def push_event(self, text: str) -> None:
-        """One EVT frame, exactly like uartLinkPushEvent (own seq counter)."""
+        """One EVT frame, exactly like uartLinkPushEvent (own seq counter).
+
+        UTF-8, not ASCII: the firmware copies event payloads byte for byte, so
+        a prompt carrying a curly apostrophe reaches the host as raw UTF-8.
+        """
         from hw1_ai_service.link import protocol as P
         self._evt_seq += 1
         self._write_raw(self._frame_wire(P.FRAME_EVT, self._evt_seq,
-                                         text.encode("ascii")))
+                                         text.encode("utf-8")))
 
     def begin_wake_capture(self, *, push: bool = True,
                            exchange_id: str = TEST_EVENAI_ID,
@@ -371,6 +423,150 @@ class FakeFirmware:
                 self.live_shadow_begin_sent.wait(timeout=1.0)
             self.native_emit_order.append("evenai_wake")
             self.push_event(f"evenai_wake {exchange_id}")
+
+    # -- CM5-as-LLM-source double --------------------------------------------
+
+    def llm_select(self, name: str) -> None:
+        """Mirror cm5LlmSelectByName: LOADING until the host says `ready`."""
+        with self._lock:
+            self.cm5_llm_active = name
+            self.cm5_llm_host_ready = False
+        self.push_event(f"llm_select {llm_escape(name)}")
+
+    def llm_ask(self, prompt: str, *, max_tokens: int = 250,
+                temp_x100: int = 70, topp_x100: int = 95,
+                session: int | None = None) -> int:
+        """Mirror cm5LlmStartAsync: mint a session, then push the ask."""
+        with self._lock:
+            self._llm_next_session += 1
+            sess = self._llm_next_session if session is None else session
+            self.cm5_llm_session = sess
+            self.cm5_llm_expect_seq = 0
+            self.cm5_llm_text = ""
+            self.cm5_llm_done = False
+            self.cm5_llm_gen_epoch = self.cm5_session_epoch
+        self.push_event(
+            f"llm_ask {sess} {max_tokens} {temp_x100} {topp_x100} "
+            f"{llm_escape(prompt)}")
+        return sess
+
+    def llm_cancel(self, session: int | None = None) -> None:
+        """Mirror cm5LlmStop: the device finishes LOCALLY first, then tells the
+        host. Anything the host sends afterwards is legitimately stale."""
+        with self._lock:
+            sess = self.cm5_llm_session if session is None else session
+            epoch = self.cm5_llm_gen_epoch
+            if not self.cm5_llm_done:
+                self.cm5_llm_done = True
+                self.cm5_llm_gen_epoch = 0
+        if sess and epoch:
+            self.push_event(f"llm_cancel {sess}")
+
+    def llm_stall(self) -> None:
+        """Mirror cm5LlmTick's abandon path after CM5_LLM_STALL_MS of silence."""
+        with self._lock:
+            self.cm5_llm_done = True
+            self.cm5_llm_gen_epoch = 0
+            self.cm5_llm_expect_seq = 0
+
+    @property
+    def cm5_llm_models(self) -> list[str]:
+        return [row[0] for row in self.cm5_llm_catalog[:self.cm5_llm_count]
+                if row is not None]
+
+    def _cm5_llm_intrinsic(self, line: str) -> str | None:
+        """Mirror cm5LlmHandleCallbackIntrinsic.
+
+        Returns None when the line is not ours. Every other path returns a
+        reply, including refusals: on real firmware this runs BEFORE cmd_exec,
+        so a host retry must never fall through into the durable command audit.
+        """
+        if not re.match(r"cm5\s+llm(?:\s|$)", line.strip(), re.IGNORECASE):
+            return None
+        if self.cm5_session_epoch == 0 or self.authed_user is None:
+            return "ERROR no authenticated uart session"
+        if self.role not in {"user", "admin", "superadmin"}:
+            return "ERROR session may not control this device"
+        body = line.strip()
+
+        m = re.fullmatch(
+            r"cm5\s+llm\s+models\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)",
+            body, re.IGNORECASE)
+        if m:
+            gen, idx, cnt, mb = (int(m.group(i)) for i in range(1, 5))
+            name = m.group(5)[:31]          # tokCopy into LLM_MODEL_NAME_LEN
+            cnt = min(cnt, 8)
+            if idx >= 8:
+                return "OK dropped"
+            if gen != self.cm5_llm_gen:
+                self.cm5_llm_gen = gen
+                self.cm5_llm_catalog = [None] * 8
+                self.cm5_llm_count = 0
+            self.cm5_llm_catalog[idx] = (name, mb * 1024)
+            self.cm5_llm_count = max(self.cm5_llm_count, idx + 1)
+            if 0 < cnt < self.cm5_llm_count:
+                self.cm5_llm_count = cnt
+            return f"OK {idx}"
+        if re.match(r"cm5\s+llm\s+models(?:\s|$)", body, re.IGNORECASE):
+            return "ERROR usage: cm5 llm models <gen> <idx> <count> <sizeMB> <name>"
+
+        m = re.fullmatch(r"cm5\s+llm\s+ready\s+(\d+)\s+(\S+)", body, re.IGNORECASE)
+        if m:
+            self.cm5_llm_gen = int(m.group(1))
+            # The host is authoritative about what it is actually serving.
+            self.cm5_llm_active = m.group(2)[:31]
+            self.cm5_llm_host_ready = True
+            return f"OK {self.cm5_llm_active}"
+        if re.match(r"cm5\s+llm\s+ready(?:\s|$)", body, re.IGNORECASE):
+            return "ERROR usage: cm5 llm ready <gen> <name>"
+
+        m = re.fullmatch(r"cm5\s+llm\s+push\s+(\d+)\s+(\d+)(?:\s+(\S*))?",
+                         body, re.IGNORECASE)
+        if m:
+            sess, seq = int(m.group(1)), int(m.group(2))
+            if sess != self.cm5_llm_session or self.cm5_llm_session == 0:
+                return "ERROR stale session"
+            if (self.cm5_llm_gen_epoch == 0 or
+                    self.cm5_llm_gen_epoch != self.cm5_session_epoch):
+                return "ERROR session epoch mismatch"
+            if self.cm5_llm_done:
+                return "ERROR no generation in flight"
+            if seq == self.cm5_llm_expect_seq:
+                self.cm5_llm_expect_seq += 1
+                self.cm5_llm_text += llm_unescape(m.group(3) or "")
+                self.cm5_llm_pushes.append((sess, seq))
+                return f"OK {seq}"
+            if seq < self.cm5_llm_expect_seq:
+                return f"OK {seq}"          # replay — already applied
+            # A gap means a chunk was lost; the answer can no longer be exact.
+            self.cm5_llm_done = True
+            self.cm5_llm_gen_epoch = 0
+            self.cm5_llm_expect_seq = 0
+            return "ERROR sequence gap"
+        if re.match(r"cm5\s+llm\s+push(?:\s|$)", body, re.IGNORECASE):
+            return "ERROR usage: cm5 llm push <session> <seq> <text>"
+
+        m = re.fullmatch(
+            r"cm5\s+llm\s+end\s+(\d+)\s+(\S+)(?:\s+(\d+))?(?:\s+(\d+))?",
+            body, re.IGNORECASE)
+        if m:
+            sess = int(m.group(1))
+            if sess != self.cm5_llm_session or self.cm5_llm_session == 0:
+                return "ERROR stale session"
+            if (self.cm5_llm_gen_epoch == 0 or
+                    self.cm5_llm_gen_epoch != self.cm5_session_epoch):
+                return "ERROR session epoch mismatch"
+            self.cm5_llm_done = True
+            self.cm5_llm_gen_epoch = 0
+            self.cm5_llm_ends.append(
+                (sess, m.group(2).lower(), int(m.group(3) or 0),
+                 int(m.group(4) or 0)))
+            return "OK"
+        if re.match(r"cm5\s+llm\s+end(?:\s|$)", body, re.IGNORECASE):
+            return ("ERROR usage: cm5 llm end <session> "
+                    "<ok|error|stopped> [tokens] [tokPerSecX10]")
+
+        return "ERROR unknown verb — expected models|ready|push|end"
 
     def dismiss_evenai(self, reason: str = "dismiss", *, push: bool = True) -> None:
         with self._lock:
@@ -499,6 +695,10 @@ class FakeFirmware:
                     line.strip(), re.IGNORECASE):
             return False
         normalized = line.strip().lower()
+        # `cm5 llm ...` is an intrinsic consumed before cmd_exec, so like the
+        # presence verbs it is not device work and does not bridge liveness.
+        if re.match(r"cm5\s+llm(?:\s|$)", normalized):
+            return False
         if re.match(r"liveaudio\s+(status|capabilities)(?:\s|$)",
                     normalized):
             return False
@@ -557,6 +757,11 @@ class FakeFirmware:
         delay = self.delay_once.pop(line, None)
         if delay is None:
             delay = self.delay_once.pop(line.split(" ")[0], None)
+        if delay is None and self.cm5_llm_push_delay:
+            # Push lines carry payload, so they can only be keyed by seq.
+            m = re.match(r"cm5\s+llm\s+push\s+\d+\s+(\d+)", line, re.IGNORECASE)
+            if m:
+                delay = self.cm5_llm_push_delay.pop(int(m.group(1)), None)
         if delay:
             time.sleep(delay)   # handler thread blocks = late reply, like a busy cmd_exec
         with self._lock:
@@ -605,6 +810,12 @@ class FakeFirmware:
                 suffix = " (admin)" if self.role in {"admin", "superadmin"} else ""
                 return f"OK: logged in as {parts[0]}{suffix}"
             return "Error: authentication failed"
+
+        # Consumed by an intrinsic BEFORE the ordinary command path, so an LLM
+        # callback never takes the command lock and never reaches the audit.
+        llm_reply = self._cm5_llm_intrinsic(line)
+        if llm_reply is not None:
+            return llm_reply
 
         if self.require_auth and self.authed_user is None:
             # Firmware nag is rate-limited: one per 2s, otherwise SILENCE.

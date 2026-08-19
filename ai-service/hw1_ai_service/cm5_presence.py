@@ -29,10 +29,16 @@ LEGACY_REPROBE_INTERVAL_S = 60.0
 NORMAL_LEASE_MS = 15_000
 BUSY_LEASE_MS = 75_000
 
+# Trailing UNKNOWN fields are tolerated; the four load-bearing ones are still
+# mandatory, positional, and fully validated below. Without the tail clause a
+# firmware that appends one field puts every deployed daemon into a permanent
+# reconnect loop — a mismatch here raises LinkClosed, which tears down the task
+# group, and the very first heartbeat of the new epoch fails the same way. That
+# is a total outage for an additive change, so the tolerance is the point.
 _REPLY_RE = re.compile(
     r"^OK: cm5 heartbeat version=1 seq=([0-9]+) "
     r"state=(starting|ready|busy|degraded) "
-    r"session_epoch=([0-9]+) lease_ms=([0-9]+)$")
+    r"session_epoch=([0-9]+) lease_ms=([0-9]+)(?: .*)?$")
 
 
 class Cm5PresenceMode(StrEnum):
@@ -61,6 +67,17 @@ class Cm5Presence:
         self._failure: BaseException | None = None
         self._supported: bool | None = None
         self._running = False
+        # BUSY is a REFCOUNT with named holders, not a flag. STT and a
+        # CM5-routed generation overlap freely (a wearer wake while the web UI
+        # drives `cm5:<model>`), and whichever finished first would otherwise
+        # drop the SHARED lease back to READY while the other was still
+        # working — which is precisely the stale lease the firmware abandons a
+        # live generation for. The names never reach the wire: the firmware's
+        # heartbeat grammar is closed at starting|ready|busy|degraded
+        # (System_Cm5Presence.cpp), so they exist for this host's logs and
+        # diagnostics only.
+        self._busy_holds: dict[int, str] = {}
+        self._busy_seq = 0
         add_reboot_listener = getattr(session, "add_reboot_listener", None)
         if callable(add_reboot_listener):
             add_reboot_listener(self._reboot_suspected)
@@ -72,6 +89,55 @@ class Cm5Presence:
     @property
     def supported(self) -> bool | None:
         return self._supported
+
+    @property
+    def busy_reasons(self) -> tuple[str, ...]:
+        """What this host is currently busy doing, for logs and diagnostics."""
+        return tuple(self._busy_holds.values())
+
+    def _busy_summary(self) -> str:
+        return ", ".join(sorted(self._busy_holds.values())) or "idle"
+
+    async def acquire_busy(self, reason: str) -> int:
+        """Take a named share of the BUSY lease; wait for the device to ack it.
+
+        Acknowledged before the caller starts its long work, so the device has
+        already widened the lease by the time the host goes quiet on it.
+        STARTING and DEGRADED are stronger statements than "working" and are
+        left alone.
+        """
+        self._busy_seq += 1
+        token = self._busy_seq
+        self._busy_holds[token] = reason
+        log.info("CM5 busy: %s", self._busy_summary())
+        if self._desired in (Cm5PresenceMode.READY, Cm5PresenceMode.BUSY):
+            await self.set_mode(Cm5PresenceMode.BUSY)
+        return token
+
+    def release_busy(self, token: int, *,
+                     fallback: Cm5PresenceMode | str | None = None) -> None:
+        """Drop one named share.
+
+        Never awaits: callers release inside finally blocks that may already be
+        running under TaskGroup cancellation, where awaiting a sibling actor
+        would not complete anyway.
+        """
+        fallback = (Cm5PresenceMode.READY if fallback is None
+                    else Cm5PresenceMode(fallback))
+        if self._busy_holds.pop(token, None) is None:
+            return
+        if fallback is Cm5PresenceMode.DEGRADED:
+            # A fault outranks the refcount. Staying BUSY because a sibling is
+            # still working would hide that this host is impaired.
+            log.info("CM5 degraded (was: %s)", self._busy_summary())
+            self.set_mode_nowait(Cm5PresenceMode.DEGRADED)
+            return
+        if self._busy_holds:
+            log.info("CM5 busy: %s", self._busy_summary())
+            return
+        if self._desired is Cm5PresenceMode.BUSY:
+            log.info("CM5 idle")
+            self.set_mode_nowait(fallback)
 
     def set_mode_nowait(self, mode: Cm5PresenceMode | str) -> int:
         mode = Cm5PresenceMode(mode)
@@ -101,6 +167,9 @@ class Cm5Presence:
 
     def link_reset(self) -> None:
         """Invalidate the old login epoch before a supervisor reconnect."""
+        # Every holder's work is bound to the epoch that just ended, so the
+        # refcount goes with it rather than pinning BUSY into the new one.
+        self._busy_holds.clear()
         self._desired = Cm5PresenceMode.STARTING
         self._desired_generation += 1
         self._acknowledged_generation = 0

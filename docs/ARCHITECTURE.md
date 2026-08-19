@@ -168,6 +168,9 @@ ai-service/
 │   │                         #   request-ID dedupe, helper client, auto policy
 │   ├── fan.py                # finite host-fan EVT parser, ACK/report FSM,
 │   │                         #   epoch-bound bridge to the root Unix socket
+│   ├── cm5_llm.py            # this host as a source in the firmware's LLM
+│   │                         #   model registry: GGUF catalog, model switch,
+│   │                         #   seq'd answer streaming back over the link
 │   └── pipeline.py           # VoicePipeline: trigger → fetch → stt → llm → deliver;
 │                             #   also text-only path (chat)
 └── tests/
@@ -182,6 +185,8 @@ ai-service/
     ├── test_live_pcm_shadow_probe.py # PDM/G2 fake parity/fault/cleanup probe
     ├── test_fan.py           # strict UART/socket bridge + dedupe/epoch tests
     ├── test_fan_daemon.py    # fake-sysfs curve, safety, discovery, rollback
+    ├── test_cm5_llm.py       # escaping round-trip, byte-exact delta
+    │                         #   reassembly, seq/retry, terminal-end paths
     └── test_soak.py          # stall-injection burst soak (slow marker)
 
 tools/live_pcm_transport_probe.py     # standalone deterministic UART probe
@@ -398,6 +403,49 @@ attempts recovery for a wedged or `SIGKILL`ed controller while the unique sysfs
 topology remains discoverable. The user AI daemon never receives sysfs write
 permission and cannot widen the controller's finite command vocabulary.
 
+### cm5_llm.py — this host as a source in the firmware's LLM model registry
+
+The XIAO owns a model registry in which its on-device engine and this host are
+two symmetric *sources*; picking `cm5:<model>` on any surface (web, OLED, G2,
+CLI, BLE app) routes that whole conversation here. The firmware is the server
+and cannot call us and block, so it pushes `llm_select` / `llm_ask` /
+`llm_cancel` EVTs and waits for authenticated `cm5 llm models|ready|push|end`
+commands — the same shape as the power and fan planes. It consumes those with
+an intrinsic ahead of `cmd_exec`, so a push never takes the command lock and
+never lands in the durable command audit.
+
+Three details carry the design. **Escaping**: the firmware trims every inbound
+line and a streamed delta carries its inter-word space exactly at the chunk
+boundary, so *all* whitespace is escaped in both directions and an unknown
+escape decodes to the character itself; the tables mirror `cm5LlmEscape` /
+`cm5LlmUnescape` byte for byte and the test double owns its own transcription
+so the round-trip test cannot agree with itself. **Routing**: `llm_ask` is
+claimed in `route_link_event` *before* the generic strict-ASCII decode, because
+one curly apostrophe from a phone keyboard would otherwise lose the whole
+prompt with nothing but a log line — no error and no timeout on either side.
+**Sequencing**: `push` carries a seq contiguous from 0 that the firmware applies
+idempotently, so a timed-out push replays that exact seq rather than using
+`Session`'s own replay, which re-logs-in first and would both duplicate an
+append and transplant an epoch-bound line into a new login epoch.
+
+Answers stream on the validated EvenAI cadence (open at the first sentence end
+past 30 chars, then flush per sentence or at 140 chars on a word boundary,
+capped to 200 bytes decoded), because per-token pushes cannot fit a link that
+admits one line per loop lap. A terminal `end` is sent on every path including
+error and cancel: without it every surface shows a hung answer until the
+firmware's 45 s stall timer fires. A cold model whose prefill outlasts that
+timer is held open with empty pushes, which the firmware documents as a legal
+no-op that still stamps the stall clock.
+
+The catalog is filesystem-derived (`*.gguf`, capped at the firmware's 8, names
+sanitized to one escape-free token inside its 31-char buffer), so it publishes
+at link-up while llama-server is still loading; `ready` waits for `/health`.
+The protocol has no "select failed" verb by design — the firmware adopts
+whatever `ready` reports — so a request for a model that is not here
+re-publishes the catalog and reports the model actually being served rather
+than stranding the device in LOADING. A live generation is abandoned on link
+reset, since the firmware fences it on the login epoch that started it.
+
 ## 4. Audio path (P0 = A0 fetch)
 
 `audio/fetch.py`, driven by the pipeline:
@@ -475,7 +523,15 @@ streaming half).
   sentences per plan D6).
 - Model is a config path — the P0 bench (plan §8) decides between
   Qwen3-1.7B, LFM2.5-1.2B, and the Qwen2.5-1.5B baseline; nothing in the
-  code cares which GGUF it is.
+  code cares which GGUF it is. `switch_model()` restarts the child on a
+  different GGUF for a device-side model pick, and restores the previous one
+  if the new one will not come up healthy — a bad pick degrades to "the old
+  model still works", never to "the LLM is gone".
+- `ask_stream` takes optional per-turn `max_tokens` / `temperature` /
+  `top_p`. These exist for turns the FIRMWARE owns: a CM5-routed `llm_ask`
+  carries the device's centrally clamped values, and ignoring them would void
+  the override contract the web and BLE surfaces rely on. Local callers pass
+  nothing and keep the configured defaults.
 
 ## 6. Pipeline and delivery
 
@@ -603,6 +659,9 @@ llm:
     ambiguity would change the answer, ask one brief question. Never invent
     current facts, observations, memories, capabilities, or completed actions.
   history_turns: 8
+  serve_firmware: true      # publish this host's GGUFs as `cm5:<model>` and
+                            #   serve llm_ask generations over the UART link
+  model_dir: /opt/models    # selectable *.gguf; empty = the dir holding `model`
 deliver:
   targets: [oled]           # oled | g2
   allow_oledstart: true

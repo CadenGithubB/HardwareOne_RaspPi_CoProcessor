@@ -18,6 +18,7 @@ import sys
 from . import config as config_mod
 from . import log as log_mod
 from . import mem
+from .cm5_llm import Cm5LlmService
 from .cm5_presence import Cm5Presence, Cm5PresenceMode
 from .cm5_time import Cm5Time
 from .fan import FanController
@@ -211,10 +212,15 @@ async def _run_daemon(
     fan = FanController(session, cfg.fan)
     cm5_presence = Cm5Presence(session)
     cm5_time = Cm5Time(session)
+    # Constructed with the control plane, not the model plane: the GGUF catalog
+    # is filesystem-derived, so the device's picker populates while llama-server
+    # is still loading. _LazyDaemonPipeline attaches the client once /health is
+    # green, which is also when the firmware is told the model is READY.
+    cm5_llm = Cm5LlmService(session, cfg.llm, cm5_presence=cm5_presence)
     pipeline = _LazyDaemonPipeline(
         session, cfg, power, live_gate=live_gate,
         cancel_marker_interval_s=cancel_marker_interval_s,
-        cm5_presence=cm5_presence)
+        cm5_presence=cm5_presence, cm5_llm=cm5_llm)
     if cancel_marker_interval_s > 0:
         log.warning(
             "EvenAI cancellation TAP-NOW markers enabled every %.3fs "
@@ -223,7 +229,7 @@ async def _run_daemon(
     try:
         await trigger.serve_socket(cfg.service.socket_path)
         session.on_event = lambda payload: route_link_event(
-            payload, trigger, session, power, fan)
+            payload, trigger, session, power, fan, cm5_llm)
         await power.start()
         await _daemon_supervised(
             pipeline,
@@ -235,11 +241,13 @@ async def _run_daemon(
             live_gate=live_gate, fan=fan,
             cm5_presence=cm5_presence,
             cm5_time=cm5_time,
+            cm5_llm=cm5_llm,
         )
     finally:
         session.on_event = None
         await trigger.close()
         await pipeline.close()
+        await cm5_llm.close()
         await fan.close()
         await power.close()
 
@@ -250,7 +258,8 @@ async def _daemon_supervised(pipeline, trigger: ManualTrigger,
                              g2_stream_speed: int, *, live_gate=None,
                              fan: FanController | None = None,
                              cm5_presence: Cm5Presence | None = None,
-                             cm5_time: Cm5Time | None = None) -> None:
+                             cm5_time: Cm5Time | None = None,
+                             cm5_llm: Cm5LlmService | None = None) -> None:
     """Run the daemon loop + the idle event pump, recovering the link when it
     dies: close -> backoff -> reopen -> re-login (the ARCHITECTURE §3
     reconnect story). The pump makes idle-time link death (and idle-time EVT
@@ -278,6 +287,8 @@ async def _daemon_supervised(pipeline, trigger: ManualTrigger,
                     tg.create_task(cm5_presence.run())
                 if cm5_time is not None:
                     tg.create_task(cm5_time.run())
+                if cm5_llm is not None:
+                    tg.create_task(cm5_llm.run())
                 if (reboot_generation is not None and
                         callable(getattr(
                             session, "wait_for_reboot_after", None))):
@@ -297,6 +308,12 @@ async def _daemon_supervised(pipeline, trigger: ManualTrigger,
                 cm5_presence.link_reset()
             if cm5_time is not None:
                 cm5_time.link_reset()
+            if cm5_llm is not None:
+                # A live generation is fenced on the login epoch that started
+                # it, so its remaining pushes would be rejected by the device
+                # anyway. Abandon the turn instead of replaying it into the
+                # replacement epoch.
+                cm5_llm.link_reset()
             transport.close()
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
@@ -376,13 +393,15 @@ class _LazyDaemonPipeline:
 
     def __init__(self, session: Session, cfg, power: PowerController, *,
                  live_gate=None, cancel_marker_interval_s: float = 0.0,
-                 cm5_presence: Cm5Presence | None = None) -> None:
+                 cm5_presence: Cm5Presence | None = None,
+                 cm5_llm: Cm5LlmService | None = None) -> None:
         self._session = session
         self._cfg = cfg
         self._power = power
         self._live_gate = live_gate
         self._cancel_marker_interval_s = cancel_marker_interval_s
         self._cm5_presence = cm5_presence
+        self._cm5_llm = cm5_llm
         self._pipeline: VoicePipeline | None = None
         self._llm_client = None
         self._supervisor = None
@@ -427,6 +446,11 @@ class _LazyDaemonPipeline:
             # native model loads and risking OOM.
             stt_engine = await asyncio.shield(self._stt_load_task)
             self._llm_client, self._supervisor = await _make_llm(self._cfg)
+            if self._cm5_llm is not None:
+                # _make_llm only returns once /health is green, which is the
+                # firmware's precondition for `cm5 llm ready`: announcing
+                # earlier would let it start a generation that then fails.
+                await self._cm5_llm.attach(self._llm_client, self._supervisor)
             self._pipeline = VoicePipeline(
                 self._session, stt_engine, self._llm_client, self._cfg,
                 power_activity=self._power, live_gate=self._live_gate,
