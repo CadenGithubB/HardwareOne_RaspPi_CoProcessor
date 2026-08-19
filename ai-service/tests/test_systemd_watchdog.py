@@ -172,7 +172,7 @@ def test_service_unit_enables_main_process_watchdog():
 
 
 def test_deploy_targets_the_remote_account_home():
-    deploy = (Path(__file__).resolve().parents[2] / "deploy_cm5.sh").read_text()
+    deploy = (Path(__file__).resolve().parents[2] / "deploy.sh").read_text()
     assert 'CM5_HOST="${CM5_HOST:-xiaocm5}"' in deploy
     assert 'CM5_USER="${CM5_USER:-cm5}"' in deploy
     assert 'DEST="${CM5_SSH}:hw1-ai-service/"' in deploy

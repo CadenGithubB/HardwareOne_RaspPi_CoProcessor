@@ -2,7 +2,7 @@
 # Take a bare Raspberry Pi 5 or Compute Module 5 to a running hw1-ai-service.
 #
 # Run this ON THE DEVICE, as the unprivileged service account, after the source
-# tree is present (./deploy_cm5.sh from the Mac, or a git clone here):
+# tree is present (./deploy.sh from the Mac, or a git clone here):
 #
 #   ~/hw1-ai-service/bootstrap.sh              # do everything it safely can
 #   ~/hw1-ai-service/bootstrap.sh --dry-run    # print the plan, change nothing

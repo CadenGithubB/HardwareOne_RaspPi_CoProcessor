@@ -2,12 +2,12 @@
 # Gated deploy: the full local check suite must pass before rsync can run.
 # User-invoked only — never wire this into anything automatic.
 #
-#   ./deploy_cm5.sh           # checks -> itemized dry-run -> confirm -> rsync
-#   ./deploy_cm5.sh --verify  # additionally run the Pi-side post-deploy check
+#   ./deploy.sh           # checks -> itemized dry-run -> confirm -> rsync
+#   ./deploy.sh --verify  # additionally run the Pi-side post-deploy check
 #                             # over ssh (will prompt for the password)
-#   ./deploy_cm5.sh --verify-only  # verify an already-synced installation
-#   CM5_HOST=x.x.x.x ./deploy_cm5.sh --verify  # temporary DHCP override
-#   CM5_USER=name ./deploy_cm5.sh --verify      # alternate SSH account
+#   ./deploy.sh --verify-only  # verify an already-synced installation
+#   CM5_HOST=x.x.x.x ./deploy.sh --verify  # temporary DHCP override
+#   CM5_USER=name ./deploy.sh --verify      # alternate SSH account
 #
 # Canonical paths per docs/CM5_DEPLOYMENT_PATHS.md: trailing slashes are load-
 # bearing (contents of the one Mac source dir into the one Pi source dir),
