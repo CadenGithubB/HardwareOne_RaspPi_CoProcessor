@@ -73,12 +73,19 @@ hw1-ai-service (Python 3.11+, one systemd unit)
 
 Why this shape (established by the plan + audit):
 
-- **The wire has no flow control and drops bytes silently.** The kernel tty
-  buffer absorbs ~64KB ≈ 0.7s at full burst rate; anything that stalls the
-  reader longer than that during an A1/A2 audio burst corrupts audio with
-  no error anywhere. Hence the dedicated reader thread with a never-block
-  contract, inference in an executor, and no synchronous HTTP on the event
-  loop. A P0 soak test proves the property before it matters (§7).
+- **The wire has no flow control and drops bytes silently.** The carrier
+  routes only TX/RX/power, so RTS/CTS is not available at any price — there
+  is no backpressure on this link, ever. The kernel tty flip buffers absorb
+  `TTYB_DEFAULT_MEM_LIMIT` = 640KB ≈ 7s at full burst rate (the constant was
+  64KB before Linux 4.4/4.9-stable raised it 10x; earlier revisions of this
+  document quoted the old value and therefore a 0.7s margin). Stall the
+  reader past that during an A1/A2 audio burst and audio corrupts with no
+  error anywhere. The limit is not tunable from userspace: it is settable
+  only via the driver-facing `tty_buffer_set_limit()`, so the margin is a
+  fixed budget to design against, not a knob. Hence the dedicated reader
+  thread with a never-block contract, inference in an executor, and no
+  synchronous HTTP on the event loop. A P0 soak test proves the property
+  before it matters (§7).
 - **One command in flight at a time.** The firmware drain executes one line
   per loop lap and replies are unframed text — pipelining buys nothing and
   breaks reply attribution. The Session layer enforces strict
@@ -519,11 +526,14 @@ session quiesces (OTA probation rule), re-login, resume polling.
   `pytest` on any POSIX dev machine, no hardware, no models (fake
   engines), no network.
 - `test_soak.py` (slow marker) — the audit's required proof: fake firmware
-  floods ~92KB/s through the pty while the event loop is deliberately
-  stalled 500ms at a time; assert zero byte loss in the reader path.
-  (A pty is not a UART — the kernel-buffer numbers differ — but the test
-  pins the PROPERTY: the reader thread keeps draining while the loop
-  stalls. The wire-level version reruns on the Pi with a real stall.)
+  floods through the pty while the event loop is deliberately stalled 500ms
+  at a time; assert zero line loss in the reader path. This pins the
+  PROPERTY — the reader thread keeps draining while the loop stalls — and
+  that is all it can pin: a pty writer blocks when its buffers fill, so no
+  stall length makes a pty drop bytes. Only the wire can. The wire-level
+  rerun on the Pi is the one that measures margin, and its stall must be
+  sized against the real ~7s budget: a 500ms stall clears it by 14x and
+  proves nothing about the cliff.
 - `test_systemd_watchdog.py` uses a local datagram socket pair to verify the
   immediate/periodic keep-alive, environment/PID validation, child-environment
   consumption, non-systemd no-op behavior, startup ordering, shutdown cleanup,
@@ -531,8 +541,8 @@ session quiesces (OTA probation rule), re-login, resume polling.
 - On-Pi validation (P0 exit criteria): login + `uartlink status` probe;
   one full `ask` exchange against the bench XIAO; the §8-plan benches
   (STT RTF solo/contended, llama-bench ladder, prompt-cache hit check,
-  stall soak on the real tty); answer visible via `oledtext` reply — all
-  before any firmware work starts.
+  multi-second stall soak on the real tty); answer visible via `oledtext`
+  reply — all before any firmware work starts.
 - Phase 2B fake-firmware coverage includes PDM/G2 source tags, exact untrimmed
   live/WAV parity, source mismatch, corrupt terminal CRC, missing-frame
   quiescence, artifacts, and exact cleanup. The full host suite passes 291

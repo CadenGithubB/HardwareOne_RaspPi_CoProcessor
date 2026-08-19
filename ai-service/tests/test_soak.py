@@ -1,9 +1,15 @@
 """The audit-required soak: prove the reader thread keeps draining while the
 event loop is deliberately stalled, with zero line loss.
 
-A pty is not a UART (kernel buffer sizes differ), so this pins the
-PROPERTY — reader-thread independence from event-loop stalls — and the
-wire-level rerun happens on the Pi (ARCHITECTURE.md §7).
+A pty is not a UART, and the difference is not merely buffer sizing: a pty
+writer BLOCKS once its buffers fill, so no stall length can make this test
+drop a byte. It therefore pins the PROPERTY — reader-thread independence
+from event-loop stalls — and nothing about margin. The wire is the only
+place a stall can cost bytes; that rerun happens on the Pi against the real
+~7s flip-buffer budget (ARCHITECTURE.md §7).
+
+The 0.5s stall below is sized to exercise the property quickly, not to
+approach any cliff.
 """
 
 from __future__ import annotations

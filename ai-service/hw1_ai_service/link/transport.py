@@ -4,8 +4,9 @@ One dedicated reader thread drains the serial port and assembles newline-
 framed text lines; complete events are handed to the asyncio loop through a
 queue. THE HARD RULE (plan §4/audit): this thread never blocks on anything
 but the port itself — no inference, no JSON, no pipeline calls. The wire
-has no flow control; if nobody drains the kernel tty buffer for ~0.7s at
-full burst rate, bytes vanish silently.
+has no flow control (the carrier routes no RTS/CTS); if nobody drains the
+kernel tty flip buffers for ~7s at full burst rate — 640KB of
+TTYB_DEFAULT_MEM_LIMIT, not userspace-tunable — bytes vanish silently.
 
 TX is small (commands <= 2047B) and goes through a single write path; the
 Session layer's command lock provides the single-writer discipline.
