@@ -1,0 +1,20 @@
+{
+  "name": "openclaw-plugin-agent-notes",
+  "version": "1.4.0",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "description": "OpenClaw agent-notes plugin: persistent Markdown notes in a host Obsidian vault.",
+  "peerDependencies": {
+    "openclaw": ">=2026.9.2 <2026.10.0"
+  },
+  "openclaw": {
+    "extensions": ["./index.js"],
+    "install": {
+      "minHostVersion": ">=2026.9.2"
+    },
+    "compat": {
+      "pluginApi": ">=2026.9.2"
+    }
+  }
+}

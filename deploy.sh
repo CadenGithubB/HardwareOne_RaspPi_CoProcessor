@@ -75,7 +75,8 @@ if [ "$RUN_DEPLOY" -eq 1 ]; then
 
     echo
     echo "Synced. On the Pi:"
-    echo "  ./hw1-ai-service/bootstrap.sh    # first install, or after adding a helper"
+    echo "  ./hw1-ai-service/setup.sh        # first install (core or core + OpenClaw)"
+    echo "  ./hw1-ai-service/bootstrap.sh    # core-only reconciliation"
     echo "  systemctl --user restart hw1-ai-service.service"
     echo "  systemctl --user show hw1-ai-service.service -p ActiveState -p SubState -p NRestarts -p WatchdogTimestampMonotonic"
     echo "  # If journald is available: journalctl --user -u hw1-ai-service.service -n 40 --no-pager"

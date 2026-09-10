@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "scenario": {
+    "lookup_key": "cobalt-sparrow-731",
+    "answer_code": "delta-4829",
+    "note_title": "reference/hw1-openclaw-bench-memory",
+    "archive_title": "archive/reference-hw1-openclaw-bench-memory",
+    "tags": ["hw1-bench", "memory"],
+    "note_body": "lookup-key: cobalt-sparrow-731\nThis fixed padding keeps the answer outside the search snippet so the next session must call note_read instead of copying the search preview. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nanswer-code: delta-4829"
+  },
+  "cases": [
+    {
+      "id": "write_read",
+      "final_equals": "WRITE_READ_OK",
+      "expected_calls": [
+        {
+          "name": "note_search",
+          "args_subset": {
+            "query": "cobalt-sparrow-731",
+            "folder": "reference",
+            "exclude": ["log", "archive"]
+          }
+        },
+        {
+          "name": "note_folders",
+          "args_subset": { "prefix": "reference" }
+        },
+        {
+          "name": "note_write",
+          "args_subset": {
+            "title": "reference/hw1-openclaw-bench-memory",
+            "tags": ["hw1-bench", "memory"]
+          }
+        },
+        {
+          "name": "note_read",
+          "args_subset": { "title": "reference/hw1-openclaw-bench-memory" }
+        }
+      ],
+      "prompt": "This is a deterministic tool-use benchmark in a disposable vault. Use exactly these four tool calls, in order, with no retries or extra calls:\n1. note_search with query=\"cobalt-sparrow-731\", folder=\"reference\", exclude=[\"log\",\"archive\"]. It must find zero notes.\n2. note_folders with prefix=\"reference\".\n3. note_write with title=\"reference/hw1-openclaw-bench-memory\", tags=[\"hw1-bench\",\"memory\"], and content exactly equal to the text between BODY markers (do not include the markers):\nBODY\nlookup-key: cobalt-sparrow-731\nThis fixed padding keeps the answer outside the search snippet so the next session must call note_read instead of copying the search preview. xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nanswer-code: delta-4829\nEND BODY\n4. note_read with the savedAs returned by note_write. Verify it contains answer-code delta-4829.\nThen reply with exactly WRITE_READ_OK and nothing else."
+    },
+    {
+      "id": "cross_session_recall",
+      "final_equals": "delta-4829",
+      "expected_calls": [
+        {
+          "name": "note_search",
+          "args_subset": {
+            "query": "cobalt-sparrow-731",
+            "folder": "reference",
+            "exclude": ["log", "archive"]
+          }
+        },
+        {
+          "name": "note_read",
+          "args_subset": { "title": "reference/hw1-openclaw-bench-memory" }
+        }
+      ],
+      "prompt": "You are in a brand-new session. Recall the answer code associated with lookup key cobalt-sparrow-731 using exactly two tools and no others: first note_search with query=\"cobalt-sparrow-731\", folder=\"reference\", exclude=[\"log\",\"archive\"]; then note_read the exact note id returned by search. Do not infer the answer from the search snippet. Reply with only the answer code."
+    },
+    {
+      "id": "archive_verify",
+      "final_equals": "ARCHIVE_OK",
+      "expected_calls": [
+        {
+          "name": "note_archive",
+          "args_subset": { "title": "reference/hw1-openclaw-bench-memory" }
+        },
+        {
+          "name": "note_search",
+          "args_subset": {
+            "query": "cobalt-sparrow-731",
+            "folder": "reference",
+            "exclude": ["log", "archive"]
+          }
+        }
+      ],
+      "prompt": "This is the final step in an isolated disposable-vault benchmark. Use exactly two tools and no others: first note_archive with title=\"reference/hw1-openclaw-bench-memory\"; then note_search with query=\"cobalt-sparrow-731\", folder=\"reference\", exclude=[\"log\",\"archive\"] and verify it returns zero matches. Reply with exactly ARCHIVE_OK and nothing else."
+    }
+  ]
+}

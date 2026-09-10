@@ -11,7 +11,8 @@ import time
 import pytest
 from conftest import open_link, run
 
-from hw1_ai_service.config import Config, DeliverConfig, load as load_config
+from hw1_ai_service.config import (
+    MAX_STT_CAPTURE_SECONDS, Config, DeliverConfig, load as load_config)
 from hw1_ai_service.deliver import chunk_text, deliver
 from hw1_ai_service.link.session import CommandTimeout
 
@@ -180,6 +181,16 @@ def test_config_coercions_and_validation(tmp_path):
     bad.write_text("deliver:\n  g2_seconds: 600\n")
     with pytest.raises(ValueError, match="g2_seconds"):
         load_config(bad)                            # firmware honors 1..599 only
+
+
+def test_stt_capture_defaults_to_and_cannot_exceed_firmware_ceiling(tmp_path):
+    assert Config().audio.vad_max_seconds == MAX_STT_CAPTURE_SECONDS == 30.0
+
+    for field in ("record_seconds", "vad_max_seconds"):
+        bad = tmp_path / f"bad-{field}.yaml"
+        bad.write_text(f"audio:\n  {field}: 30.001\n")
+        with pytest.raises(ValueError, match=field):
+            load_config(bad)
 
 
 def test_wav_rejects_lying_data_header():

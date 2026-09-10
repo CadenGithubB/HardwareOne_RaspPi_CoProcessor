@@ -20,9 +20,12 @@ from . import log as log_mod
 from . import mem
 from .cm5_llm import Cm5LlmService
 from .cm5_presence import Cm5Presence, Cm5PresenceMode
+from .cm5_linkhealth import Cm5LinkHealth
 from .cm5_time import Cm5Time
+from .dictation import DictationController
 from .fan import FanController
 from .jobs import ManualTrigger, route_link_event
+from .link.health import note_reset
 from .link.session import CommandTimeout, LinkClosed, LoginFailed, Session
 from .link.transport import SerialTransport
 from .pipeline import VoicePipeline, abort_evenai_best_effort
@@ -212,15 +215,19 @@ async def _run_daemon(
     fan = FanController(session, cfg.fan)
     cm5_presence = Cm5Presence(session)
     cm5_time = Cm5Time(session)
+    cm5_health = Cm5LinkHealth(session)
     # Constructed with the control plane, not the model plane: the GGUF catalog
     # is filesystem-derived, so the device's picker populates while llama-server
     # is still loading. _LazyDaemonPipeline attaches the client once /health is
     # green, which is also when the firmware is told the model is READY.
     cm5_llm = Cm5LlmService(session, cfg.llm, cm5_presence=cm5_presence)
+    dictation = DictationController(
+        session, power=power, cm5_presence=cm5_presence)
     pipeline = _LazyDaemonPipeline(
         session, cfg, power, live_gate=live_gate,
         cancel_marker_interval_s=cancel_marker_interval_s,
-        cm5_presence=cm5_presence, cm5_llm=cm5_llm)
+        cm5_presence=cm5_presence, cm5_llm=cm5_llm,
+        dictation=dictation)
     if cancel_marker_interval_s > 0:
         log.warning(
             "EvenAI cancellation TAP-NOW markers enabled every %.3fs "
@@ -229,7 +236,7 @@ async def _run_daemon(
     try:
         await trigger.serve_socket(cfg.service.socket_path)
         session.on_event = lambda payload: route_link_event(
-            payload, trigger, session, power, fan, cm5_llm)
+            payload, trigger, session, power, fan, cm5_llm, dictation)
         await power.start()
         await _daemon_supervised(
             pipeline,
@@ -241,11 +248,14 @@ async def _run_daemon(
             live_gate=live_gate, fan=fan,
             cm5_presence=cm5_presence,
             cm5_time=cm5_time,
+            cm5_health=cm5_health,
             cm5_llm=cm5_llm,
+            dictation=dictation,
         )
     finally:
         session.on_event = None
         await trigger.close()
+        await dictation.close()
         await pipeline.close()
         await cm5_llm.close()
         await fan.close()
@@ -259,7 +269,9 @@ async def _daemon_supervised(pipeline, trigger: ManualTrigger,
                              fan: FanController | None = None,
                              cm5_presence: Cm5Presence | None = None,
                              cm5_time: Cm5Time | None = None,
-                             cm5_llm: Cm5LlmService | None = None) -> None:
+                             cm5_health: Cm5LinkHealth | None = None,
+                             cm5_llm: Cm5LlmService | None = None,
+                             dictation: DictationController | None = None) -> None:
     """Run the daemon loop + the idle event pump, recovering the link when it
     dies: close -> backoff -> reopen -> re-login (the ARCHITECTURE §3
     reconnect story). The pump makes idle-time link death (and idle-time EVT
@@ -287,8 +299,12 @@ async def _daemon_supervised(pipeline, trigger: ManualTrigger,
                     tg.create_task(cm5_presence.run())
                 if cm5_time is not None:
                     tg.create_task(cm5_time.run())
+                if cm5_health is not None:
+                    tg.create_task(cm5_health.run())
                 if cm5_llm is not None:
                     tg.create_task(cm5_llm.run())
+                if dictation is not None:
+                    tg.create_task(dictation.run())
                 if (reboot_generation is not None and
                         callable(getattr(
                             session, "wait_for_reboot_after", None))):
@@ -296,6 +312,7 @@ async def _daemon_supervised(pipeline, trigger: ManualTrigger,
                         session, reboot_generation))
             return
         except* LinkClosed:
+            note_reset(transport)
             log.warning("link lost — reconnecting in %.0fs", backoff)
             if live_gate is not None:
                 live_gate.link_reset()
@@ -308,12 +325,16 @@ async def _daemon_supervised(pipeline, trigger: ManualTrigger,
                 cm5_presence.link_reset()
             if cm5_time is not None:
                 cm5_time.link_reset()
+            if cm5_health is not None:
+                cm5_health.link_reset()
             if cm5_llm is not None:
                 # A live generation is fenced on the login epoch that started
                 # it, so its remaining pushes would be rejected by the device
                 # anyway. Abandon the turn instead of replaying it into the
                 # replacement epoch.
                 cm5_llm.link_reset()
+            if dictation is not None:
+                dictation.link_reset()
             transport.close()
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
@@ -394,7 +415,8 @@ class _LazyDaemonPipeline:
     def __init__(self, session: Session, cfg, power: PowerController, *,
                  live_gate=None, cancel_marker_interval_s: float = 0.0,
                  cm5_presence: Cm5Presence | None = None,
-                 cm5_llm: Cm5LlmService | None = None) -> None:
+                 cm5_llm: Cm5LlmService | None = None,
+                 dictation: DictationController | None = None) -> None:
         self._session = session
         self._cfg = cfg
         self._power = power
@@ -402,6 +424,7 @@ class _LazyDaemonPipeline:
         self._cancel_marker_interval_s = cancel_marker_interval_s
         self._cm5_presence = cm5_presence
         self._cm5_llm = cm5_llm
+        self._dictation = dictation
         self._pipeline: VoicePipeline | None = None
         self._llm_client = None
         self._supervisor = None
@@ -457,6 +480,8 @@ class _LazyDaemonPipeline:
                 cancel_marker_interval_s=self._cancel_marker_interval_s,
                 cm5_presence=(self._cm5_presence
                               if stt_engine is not None else None))
+            if self._dictation is not None:
+                await self._dictation.attach(self._pipeline)
             if stt_engine is None and self._cm5_presence is not None:
                 self._cm5_presence.set_mode_nowait(Cm5PresenceMode.DEGRADED)
             if self._live_gate is not None:

@@ -39,6 +39,7 @@ from typing import Protocol
 import serial
 
 from . import protocol
+from .health import LinkHealth
 
 log = logging.getLogger("link.transport")
 
@@ -93,7 +94,9 @@ class SerialTransport:
         self._frame_sink = frame_sink
         self._last_garbage_emit = 0.0
         self.rx: asyncio.Queue[LinkEvent] = asyncio.Queue(maxsize=_RX_QUEUE_MAX)
-        self.garbage_count = 0          # cumulative incidents (not events)
+        # Daemon-lifetime tally, deliberately NOT reset by close()/open(): a
+        # reconnect is itself one of the things worth counting.
+        self.health = LinkHealth()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -149,6 +152,7 @@ class SerialTransport:
         if self._ser is None:
             raise ConnectionError("link is closed")
         self._ser.write(data + b"\n")
+        self.health.note_tx()
 
     # -- reader thread -----------------------------------------------------
 
@@ -175,8 +179,13 @@ class SerialTransport:
                 pass
         q.put_nowait(ev)
 
+    @property
+    def garbage_count(self) -> int:
+        """Cumulative incidents (not events) — kept as the long-standing name."""
+        return self.health.garbage
+
     def _note_garbage(self) -> None:
-        self.garbage_count += 1
+        self.health.note_garbage()
         now = time.monotonic()
         if now - self._last_garbage_emit >= _GARBAGE_EVENT_WINDOW_S:
             self._last_garbage_emit = now
@@ -287,4 +296,5 @@ class SerialTransport:
         if printable < max(1, int(len(text) * 0.8)):
             self._note_garbage()
             return
+        self.health.note_rx_line()
         self._emit(LinkEvent("line", text))

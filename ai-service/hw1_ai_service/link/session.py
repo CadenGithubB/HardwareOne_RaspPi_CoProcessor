@@ -161,6 +161,8 @@ class Session:
         self._reboot_generation = 0
         self._reboot_changed = asyncio.Event()
         self._reboot_listeners: list[Callable[[], None]] = []
+        self._login_generation = 0
+        self._login_listeners: list[Callable[[int], None]] = []
         # Spontaneous EVT frame payloads land here (loop thread, may fire from
         # any consumption path — including mid-command). Keep handlers cheap
         # and non-blocking: queue a job, never run one.
@@ -171,6 +173,13 @@ class Session:
         # wants to wait has reached its await. A bare asyncio.Event would lose
         # that push and cost a full backstop interval.
         self.mic_autostop = EventLatch()
+
+    @property
+    def health(self):
+        """The link's daemon-lifetime fault tally (link/health.py). Lives on
+        the transport so it survives the reconnect that replaces this
+        Session's authenticated epoch but not its wire."""
+        return self._t.health
 
     # -- public API --------------------------------------------------------
 
@@ -321,6 +330,21 @@ class Session:
         if listener not in self._reboot_listeners:
             self._reboot_listeners.append(listener)
 
+    @property
+    def login_generation(self) -> int:
+        """Monotonic token incremented after every successful UART login."""
+        return self._login_generation
+
+    def add_login_listener(self, listener: Callable[[int], None]) -> None:
+        """Register cheap loop-thread work for authenticated-epoch changes.
+
+        The callback runs while Session still owns its command lock. It must
+        only invalidate local state or schedule work; it must never perform
+        UART I/O inline.
+        """
+        if listener not in self._login_listeners:
+            self._login_listeners.append(listener)
+
     async def wait_for_reboot_after(self, generation: int) -> None:
         """Wait until a reboot episode newer than ``generation`` is seen."""
         while self._reboot_generation <= generation:
@@ -424,6 +448,13 @@ class Session:
                 # Deliberately does NOT clear reboot_suspected: a successful
                 # re-login proves the session works again, not that no reboot
                 # happened — the pipeline still needs the hint to quiesce.
+                self._login_generation += 1
+                self.health.note_login()
+                for listener in tuple(self._login_listeners):
+                    try:
+                        listener(self._login_generation)
+                    except Exception:
+                        log.exception("login listener failed")
                 return
             if outcome == "timeout":
                 if attempt >= 3:
@@ -482,6 +513,7 @@ class Session:
         if ev.kind == "garbage":
             self._mark_reboot_suspected()
         elif ev.kind == "line":
+            self.health.note_stray()
             log.debug("stray line: %r", ev.text)
         elif ev.kind == "frame":
             if not self._route_frame(ev.frame):
@@ -525,12 +557,14 @@ class Session:
             else:
                 wait = remaining
                 if wait <= 0:
+                    self.health.note_timeout()
                     raise CommandTimeout(f"no reply within {timeout:.0f}s")
             try:
                 ev = await asyncio.wait_for(self._t.rx.get(), wait)
             except asyncio.TimeoutError:
                 if in_gap:
                     return reply           # quiet gap elapsed: reply complete
+                self.health.note_timeout()
                 raise CommandTimeout(f"no reply within {timeout:.0f}s")
 
             if ev.kind == "closed":
@@ -559,6 +593,7 @@ class Session:
                 if protocol.is_status_line(line):
                     reply.lines.append(line)
                     return reply
+                self.health.note_stray()
                 log.debug("stray line while expecting status: %r", line)
                 continue
 
@@ -574,7 +609,14 @@ class Session:
 
 def _redact(line: str) -> str:
     stripped = line.lstrip()
-    verb = stripped.split(maxsplit=1)[0].casefold() if stripped else ""
+    parts = stripped.split(maxsplit=3)
+    verb = parts[0].casefold() if parts else ""
     if verb == "login":
         return "login <redacted>"
+    if (verb == "dictate" and len(parts) >= 2 and
+            parts[1].casefold() in {"result", "fail"}):
+        # Keep the operation and owner ID useful for correlation, but never
+        # copy field text or a wearer-visible failure detail into host logs.
+        visible = " ".join(parts[:3])
+        return f"{visible} <redacted>" if len(parts) == 4 else visible
     return line if len(line) < 60 else line[:57] + "..."

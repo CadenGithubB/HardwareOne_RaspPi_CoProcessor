@@ -13,7 +13,7 @@ import tempfile
 import unittest
 
 
-_TOOL_PATH = (Path(__file__).resolve().parents[1] / "tools"
+_TOOL_PATH = (Path(__file__).resolve().parents[1] / "tools" / "stt"
               / "moonshine_stream_replay_check.py")
 _SPEC = importlib.util.spec_from_file_location(
     "moonshine_stream_replay_check", _TOOL_PATH)

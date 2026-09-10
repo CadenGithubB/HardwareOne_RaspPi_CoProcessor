@@ -43,6 +43,8 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .link import protocol
+from .link.health import note_corrupt
 from .link.session import CommandTimeout, LinkClosed
 
 log = logging.getLogger("cm5_llm")
@@ -665,8 +667,13 @@ class Cm5LlmService:
     async def _send_ready(self) -> None:
         if not self._active_name:
             return
+        # Idempotent on the device — the handler sets name/selected/ready
+        # unconditionally — and losing it is expensive: with no "select failed"
+        # verb in the protocol, a dropped `ready` leaves every surface showing
+        # LOADING until CM5_LLM_SELECT_TIMEOUT_MS (120s). Worth a second write.
         await self._send(
-            f"cm5 llm ready {self._generation} {escape(self._active_name)}")
+            f"cm5 llm ready {self._generation} {escape(self._active_name)}",
+            retry_idempotent=True)
 
     async def _report_actual_model(self) -> None:
         """Clear the device's LOADING state with the truth after a failed select.
@@ -872,81 +879,136 @@ class Cm5LlmService:
         mode here: every surface shows a hung answer until the firmware's
         stall timer eventually abandons it."""
         await self._send(
-            f"cm5 llm end {session} {status} {tokens} {int(tps * 10)}", gen=gen)
+            f"cm5 llm end {session} {status} {tokens} {int(tps * 10)}", gen=gen,
+            # Safe to write twice: the device fences `end` on the generation
+            # epoch it already cleared, so a duplicate comes back as "session
+            # epoch mismatch" — a benign rejection this bridge already reads as
+            # "already closed this turn".
+            retry_idempotent=True,
+            # The one line a dead turn still owes the device. It must outrank
+            # every local "we've given up" latch: without it the firmware holds
+            # a streaming turn open on EVERY surface until CM5_LLM_STALL_MS
+            # (60s) abandons it, which is what a user sees as a question that
+            # was accepted and then simply never answered.
+            force=True)
 
     # -- transport ---------------------------------------------------------
 
     async def _send(self, line: str, *, retry_idempotent: bool = False,
-                    gen: _Generation | None = None) -> bool:
-        if self._supported is False or self._closed:
+                    gen: _Generation | None = None,
+                    force: bool = False) -> bool:
+        """Write one bridge line and interpret the device's status reply.
+
+        ``retry_idempotent`` marks a line the device de-duplicates by seq, so
+        it may safely be written twice. ``force`` bypasses the capability latch
+        for the one line a dead turn still owes the device (see _send_end).
+        """
+        if self._closed:
             return False
-        try:
-            reply = await self._session.command(
-                line,
-                timeout=self._cfg.uart_timeout_s,
-                expect="status",
-                # Session's own replay re-logs-in first, which would transplant
-                # an epoch-bound line into a new epoch; and a blind replay of a
-                # push would duplicate answer text, because pushes are appends.
-                replay=False,
-                auth_replay=False,
-            )
-        except LinkClosed:
-            raise
-        except CommandTimeout:
-            if not retry_idempotent:
-                log.error("timed out sending %r", _brief(line))
-                return False
-            # Pushes are idempotent by seq on the device — an already-applied
-            # seq is accepted and ignored — so replaying exactly this line is
-            # safe and recovers a dropped reply without duplicating text.
-            log.info("timeout on %r — replaying the same seq once", _brief(line))
+        if self._supported is False and not force:
+            return False
+        # At most two writes, and the second only for a line the device
+        # de-duplicates. Everything below decides between "retry" and "give up
+        # on this line" — nothing here may disable the bridge on its own.
+        for attempt in (1, 2):
+            last = attempt == 2 or not retry_idempotent
             try:
                 reply = await self._session.command(
-                    line, timeout=self._cfg.uart_timeout_s, expect="status",
-                    replay=False, auth_replay=False)
+                    line,
+                    timeout=self._cfg.uart_timeout_s,
+                    expect="status",
+                    # Session's own replay re-logs-in first, which would
+                    # transplant an epoch-bound line into a new epoch; and a
+                    # blind replay of a push would duplicate answer text,
+                    # because pushes are appends.
+                    replay=False,
+                    auth_replay=False,
+                )
             except LinkClosed:
                 raise
+            except CommandTimeout:
+                if last:
+                    log.error("timed out sending %r", _brief(line))
+                    return False
+                # Pushes are idempotent by seq on the device — an already-
+                # applied seq is accepted and ignored — so replaying exactly
+                # this line is safe and recovers a dropped reply without
+                # duplicating text.
+                log.info("timeout on %r — replaying the same seq once",
+                         _brief(line))
+                continue
             except Exception as exc:
-                log.error("replay of %r failed: %s", _brief(line), exc)
+                log.error("could not send %r: %s", _brief(line), exc)
                 return False
-        except Exception as exc:
-            log.error("could not send %r: %s", _brief(line), exc)
-            return False
 
-        if reply.ok:
-            self._supported = True
-            return True
-        text = reply.text
-        if "Unknown command" in text:
-            if self._supported is None:
-                log.warning("this device build has no CM5 LLM registry — not "
-                            "offering the host as a model source")
-            self._supported = False
-            return False
-        if any(reason in text for reason in _BENIGN_REJECTIONS):
-            if ("session epoch mismatch" in text and gen is not None and
-                    not gen.cancel.is_set()):
-                # Not a cancel and not our stall: the firmware decided the CM5
-                # went away mid-answer, which it only does when the presence
-                # lease goes stale (cm5LlmTick's second wedge check). Name the
-                # cause rather than filing it as routine, because the shape of
-                # this failure — one slow command starving a sibling actor —
-                # reads like a link fault and is not one.
+            if reply.ok:
+                self._supported = True
+                return True
+            text = reply.text
+            verdict = protocol.classify_unknown_command(text, line)
+            if verdict == protocol.UNKNOWN_CORRUPT:
+                note_corrupt(self._session)
+                # The device echoed a verb we never wrote, so the line was
+                # damaged between here and its parser — the text channel has no
+                # CRC, unlike the P2 frames. Nothing has been learned about
+                # what this build supports. Reading this reply as "the firmware
+                # has no LLM registry" is precisely the 2026-08-25 outage: one
+                # damaged push disabled the bridge for the life of the daemon.
                 log.warning(
-                    "device abandoned generation %d mid-answer (%s). This is "
-                    "almost always a stale CM5 presence lease: the LLM bridge "
-                    "shares one Session command lock with the 5s heartbeat, so "
-                    "any command blocking longer than the firmware's 15s lease "
-                    "starves it and the firmware concludes the host is gone. "
-                    "Check llm.uart_timeout_s and the preceding log for a "
-                    "command timeout.", gen.session, text)
+                    "link damaged %r in transit — the device parsed the verb "
+                    "as %r. The bridge stays enabled; %s.",
+                    _brief(line), protocol.unknown_command_echo(text),
+                    "giving up on this line" if last else "replaying it")
+                if last:
+                    return False
+                continue
+            if verdict == protocol.UNKNOWN_MISSING:
+                if self._supported is None:
+                    # First probe: the echo matches what we wrote, so this
+                    # really is a build without the registry.
+                    log.warning("this device build has no CM5 LLM registry — "
+                                "not offering the host as a model source")
+                    self._supported = False
+                    return False
+                # Capability is settled at the first probe. A build that has
+                # already served our lines cannot lose a command mid-link, so
+                # this is a fault — a desynchronized reply stream being the
+                # likeliest — and never a reason to turn the bridge off.
+                log.error(
+                    "device reports %r unknown although the bridge was already "
+                    "working — treating it as a link fault, not a capability "
+                    "change; %s.",
+                    _brief(line),
+                    "giving up on this line" if last else "replaying it")
+                if last:
+                    return False
+                continue
+            if any(reason in text for reason in _BENIGN_REJECTIONS):
+                if ("session epoch mismatch" in text and gen is not None and
+                        not gen.cancel.is_set()):
+                    # Not a cancel and not our stall: the firmware decided the
+                    # CM5 went away mid-answer, which it only does when the
+                    # presence lease goes stale (cm5LlmTick's second wedge
+                    # check). Name the cause rather than filing it as routine,
+                    # because the shape of this failure — one slow command
+                    # starving a sibling actor — reads like a link fault and is
+                    # not one.
+                    log.warning(
+                        "device abandoned generation %d mid-answer (%s). This "
+                        "is almost always a stale CM5 presence lease: the LLM "
+                        "bridge shares one Session command lock with the 5s "
+                        "heartbeat, so any command blocking longer than the "
+                        "firmware's 15s lease starves it and the firmware "
+                        "concludes the host is gone. Check llm.uart_timeout_s "
+                        "and the preceding log for a command timeout.",
+                        gen.session, text)
+                    return False
+                log.info("device already closed this turn (%r): %s",
+                         _brief(line), text)
                 return False
-            log.info("device already closed this turn (%r): %s",
-                     _brief(line), text)
+            log.error("device rejected %r: %s", _brief(line), text)
             return False
-        log.error("device rejected %r: %s", _brief(line), text)
-        return False
+        return False   # unreachable: every branch above returns or continues
 
 
 def _brief(line: str) -> str:

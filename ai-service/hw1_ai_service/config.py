@@ -16,6 +16,12 @@ from pathlib import Path
 import yaml
 
 
+# Must match MIC_STT_MAX_CAPTURE_MS in the ESP32 firmware. This bounds both the
+# VAD-backed manual Ask flow and native Hey Even capture; shorter per-device
+# values remain valid, but no STT configuration may exceed the firmware cap.
+MAX_STT_CAPTURE_SECONDS = 30.0
+
+
 DEFAULT_SYSTEM_PROMPT = (
     "You are HardwareOne, a local offline assistant for these smart glasses, "
     "replacing the cloud-backed Even AI response path. Do not claim to be Even "
@@ -72,7 +78,7 @@ class AudioConfig:
     # Firmware without the `trim` token ignores it (the arg parser skips
     # unknown trailing words), so this is safe against an older device.
     vad_trim: bool = True
-    vad_max_seconds: float = 15.0      # safety cap while waiting for auto-stop (device also caps at 60s)
+    vad_max_seconds: float = MAX_STT_CAPTURE_SECONDS  # hard STT capture ceiling
     vad_poll_s: float = 0.25           # how often the CM5 asks the device "still recording?"
     # Ask HIGH per fileread: the firmware clamps each reply to its own
     # rawCap (~2.9KB) — requesting 4096 yields max-size chunks and ~30%
@@ -297,14 +303,16 @@ def _validate(cfg: "Config") -> None:
     for target in d.targets:
         if target not in ("oled", "g2"):
             raise ValueError(f"deliver.targets: unknown target {target!r} (oled|g2)")
-    if cfg.audio.record_seconds <= 0:
-        raise ValueError("audio.record_seconds must be > 0")
+    if not 0 < cfg.audio.record_seconds <= MAX_STT_CAPTURE_SECONDS:
+        raise ValueError(
+            f"audio.record_seconds must be in (0, {MAX_STT_CAPTURE_SECONDS:g}]")
     if not (200 <= cfg.audio.vad_silence_ms <= 10000):
         raise ValueError(
             f"audio.vad_silence_ms = {cfg.audio.vad_silence_ms}: firmware honors "
             f"200..10000 (out of range is silently reset to 1200)")
-    if cfg.audio.vad_max_seconds <= 0:
-        raise ValueError("audio.vad_max_seconds must be > 0")
+    if not 0 < cfg.audio.vad_max_seconds <= MAX_STT_CAPTURE_SECONDS:
+        raise ValueError(
+            f"audio.vad_max_seconds must be in (0, {MAX_STT_CAPTURE_SECONDS:g}]")
     if cfg.audio.vad_poll_s <= 0:
         raise ValueError("audio.vad_poll_s must be > 0")
     if cfg.audio.transfer not in ("auto", "voicefetch", "fileread"):

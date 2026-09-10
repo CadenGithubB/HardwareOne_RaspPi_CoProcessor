@@ -3,7 +3,7 @@
 # (loginctl enable-linger $USER so it runs without an active login.)
 
 [Unit]
-Description=hardwareone CM5 AI companion (STT + LLM over the UART link)
+Description=hardwareone Pi 5-family AI companion (STT + LLM over the UART link)
 
 [Service]
 Type=exec

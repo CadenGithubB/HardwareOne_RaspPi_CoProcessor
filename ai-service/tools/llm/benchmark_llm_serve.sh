@@ -18,7 +18,7 @@ umask 077
 export LC_ALL=C
 
 SERVE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-SERVE_ROOT="$(cd -- "$SERVE_SCRIPT_DIR/.." && pwd -P)"
+SERVE_ROOT="$(cd -- "$SERVE_SCRIPT_DIR/../.." && pwd -P)"
 SERVE_ACCOUNT_HOME="${HOME:?HOME must name the CM5 service account home}"
 SERVE_CONFIG="$SERVE_ACCOUNT_HOME/.config/hw1-ai-service/config.yaml"
 SERVE_PYTHON="$SERVE_ACCOUNT_HOME/hw1ai/bin/python"
@@ -57,6 +57,7 @@ SERVE_MTP_N_MAX=2
 
 SERVE_RESULT_DIR=""
 SERVE_LATEST_TMP=""
+SERVE_DOWNLOAD_TMP=""
 SERVE_TELEMETRY_PID=""
 SERVE_RUN_PID=""
 SERVE_SERVICE_WAS_ACTIVE=0
@@ -281,6 +282,24 @@ current_mem_available_bytes() {
   awk '/^MemAvailable:/ { printf "%.0f\n", $2 * 1024; exit }' /proc/meminfo
 }
 
+current_mem_total_bytes() {
+  awk '/^MemTotal:/ { printf "%.0f\n", $2 * 1024; exit }' /proc/meminfo
+}
+
+model_memory_needed_bytes() {
+  local bytes="$1"
+  # Same conservative shape as the service preflight: 1.2x file size plus a
+  # 500 MiB runtime-and-host allowance.
+  printf '%s\n' "$(((bytes * 12) / 10 + 500 * 1024 * 1024))"
+}
+
+candidate_can_ever_fit() {
+  local bytes="$1" total needed
+  total="$(current_mem_total_bytes)"
+  needed="$(model_memory_needed_bytes "$bytes")"
+  ((total > needed))
+}
+
 current_temp_millic() {
   local path
   for path in /sys/class/thermal/thermal_zone*/temp; do
@@ -394,6 +413,11 @@ cleanup_serve() {
   if [[ -n "$SERVE_LATEST_TMP" ]]; then
     rm -f -- "$SERVE_LATEST_TMP"
     SERVE_LATEST_TMP=""
+  fi
+
+  if [[ -n "$SERVE_DOWNLOAD_TMP" ]]; then
+    rm -f -- "$SERVE_DOWNLOAD_TMP"
+    SERVE_DOWNLOAD_TMP=""
   fi
 
   if [[ -n "$SERVE_TELEMETRY_PID" ]]; then
@@ -534,11 +558,34 @@ check_model_memory() {
   local model="$1" bytes available needed
   bytes="$(stat -c '%s' -- "$model")"
   available="$(current_mem_available_bytes)"
-  # Same conservative shape as the service preflight: 1.2x file size plus a
-  # 500 MiB runtime-and-host allowance.
-  needed=$(((bytes * 12) / 10 + 500 * 1024 * 1024))
+  needed="$(model_memory_needed_bytes "$bytes")"
   ((available > needed)) ||
     die "not enough available RAM for $model: need >$needed bytes, have $available"
+}
+
+record_memory_skip() {
+  local label="$1" model="$2" bytes="$3" needed total reason log json
+  needed="$(model_memory_needed_bytes "$bytes")"
+  total="$(current_mem_total_bytes)"
+  reason="model needs >$needed bytes under the benchmark safety envelope; host has $total bytes total"
+  log="$SERVE_RESULT_DIR/$label.log"
+  json="$SERVE_RESULT_DIR/arms/$label.json"
+  printf 'SKIPPED: %s\n' "$reason" | tee "$log"
+  "$SERVE_PYTHON" - "$json" "$label" "$model" "$reason" <<'PY'
+import json
+import pathlib
+import sys
+
+path, label, model, reason = sys.argv[1:]
+pathlib.Path(path).write_text(json.dumps({
+    "label": label,
+    "model": model,
+    "status": "skipped",
+    "error": reason,
+}, indent=2) + "\n")
+PY
+  printf '%s\t%s\t\t78\t%s\n' \
+    "$label" "$model" "$log" >> "$SERVE_RESULT_DIR/arms.tsv"
 }
 
 # Record that one arm's numbers are not trustworthy, without ending the sweep.
@@ -762,8 +809,9 @@ lines.extend([
 for arm in arms:
     shown = arm["label"] + (" ⚠" if arm["label"] in taints else "")
     if arm.get("status") != "ok":
+        status = arm.get("status", "failed")
         lines.append(
-            f"| {shown} | failed | — | — | — | — | — | — | — | — |"
+            f"| {shown} | {status} | — | — | — | — | — | — | — | — |"
         )
         continue
     rss = arm.get("peak_rss_kib")
@@ -884,9 +932,26 @@ fi
 # rather than reimplementing resume, size caps, and checksum verification here.
 if [[ "$SERVE_MODE" != serve ]]; then
   [[ -x "$SERVE_DOWNLOADER" ]] || die "downloader is not executable: $SERVE_DOWNLOADER"
-  "$SERVE_DOWNLOADER" --download-only \
-    --manifest "$SERVE_MANIFEST" \
-    --models-dir "$SERVE_MODELS_DIR"
+  # Do not fetch a multi-gigabyte model that cannot possibly satisfy this
+  # host's own physical-RAM safety envelope. On an 8 GB host every current row
+  # passes; on a 4 GB host the skipped row is still recorded during the sweep.
+  SERVE_DOWNLOAD_TMP="$(mktemp "$SERVE_MODELS_DIR/.serve-download-XXXXXXXX")"
+  awk -F '\t' -v OFS='\t' -v total="$(current_mem_total_bytes)" '
+    /^#/ || NF == 0 { print; next }
+    NF >= 5 {
+      needed = int(($5 * 12) / 10 + 500 * 1024 * 1024)
+      if (total > needed) print
+    }
+  ' "$SERVE_MANIFEST" > "$SERVE_DOWNLOAD_TMP"
+  if grep -qvE '^[[:space:]]*(#|$)' "$SERVE_DOWNLOAD_TMP"; then
+    "$SERVE_DOWNLOADER" --download-only \
+      --manifest "$SERVE_DOWNLOAD_TMP" \
+      --models-dir "$SERVE_MODELS_DIR"
+  else
+    printf 'No manifest candidate can fit this host; nothing to download.\n'
+  fi
+  rm -f -- "$SERVE_DOWNLOAD_TMP"
+  SERVE_DOWNLOAD_TMP=""
 fi
 
 if [[ "$SERVE_MODE" == download ]]; then
@@ -908,6 +973,10 @@ for ((i = 0; i < ${#SERVE_IDS[@]}; ++i)); do
   candidate="$SERVE_MODELS_DIR/${SERVE_FILENAMES[i]}"
   printf '  [%d/%d] %s (%s MiB)... ' \
     "$((i + 1))" "${#SERVE_IDS[@]}" "${SERVE_IDS[i]}" "$((SERVE_BYTES[i] / 1048576))"
+  if ! candidate_can_ever_fit "${SERVE_BYTES[i]}"; then
+    printf 'skipped (insufficient physical RAM)\n'
+    continue
+  fi
   verified_model_file "$candidate" "${SERVE_BYTES[i]}" "${SERVE_SHA256[i]}" || {
     printf 'FAILED\n'
     die "candidate is missing or invalid; run without --serve-only first: $candidate"
@@ -1034,6 +1103,14 @@ SERVE_BASELINE_OK=1
 for ((i = 0; i < ${#SERVE_IDS[@]}; ++i)); do
   id="${SERVE_IDS[i]}"
   candidate="$SERVE_MODELS_DIR/${SERVE_FILENAMES[i]}"
+
+  if ! candidate_can_ever_fit "${SERVE_BYTES[i]}"; then
+    record_memory_skip "$id:plain" "$candidate" "${SERVE_BYTES[i]}"
+    if [[ "$id" == *-mtp-* ]] && ((SERVE_MTP_SUPPORTED == 1)); then
+      record_memory_skip "$id:mtp" "$candidate" "${SERVE_BYTES[i]}"
+    fi
+    continue
+  fi
 
   run_one_arm "$id:plain" "$candidate"
   if ((SERVE_LAST_RC == 0)); then

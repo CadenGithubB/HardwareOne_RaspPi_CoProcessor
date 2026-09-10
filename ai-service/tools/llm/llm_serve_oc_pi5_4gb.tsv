@@ -1,0 +1,6 @@
+# id	repository	revision	filename	bytes	sha256
+# Pi 5 4 GB overclock A/B manifest. The 3.5 GiB LFM2 shipping candidate in
+# llm_serve_oc.tsv cannot satisfy this host's physical-RAM safety envelope.
+# This already-pinned 2B candidate fits, exercises the same production server
+# path, and is measured between active-baseline start/end arms at every rung.
+qwen3.5-2b-q4_0	bartowski/Qwen_Qwen3.5-2B-GGUF	7d26695454df6de5fbcce2e58681e62dae06ce43	Qwen_Qwen3.5-2B-Q4_0.gguf	1296764000	91c102fc9a86de80e427057ee938e1e34fcaf3bba956b7296e252406e05f36f6

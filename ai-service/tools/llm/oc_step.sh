@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# oc_step.sh — walk the CM5 up an overclock ladder one rung at a time.
+# oc_step.sh — walk a Pi 5-family board up an overclock ladder one rung at a time.
 #
 #   ./tools/llm/oc_step.sh status                 # what is configured vs measured
 #   sudo -n /usr/local/libexec/hw1-oc-helper stage 2600 0
@@ -22,7 +22,7 @@ umask 022
 export LC_ALL=C
 
 OC_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-OC_ROOT="$(cd -- "$OC_SCRIPT_DIR/.." && pwd -P)"
+OC_ROOT="$(cd -- "$OC_SCRIPT_DIR/../.." && pwd -P)"
 OC_HOME="${HOME:?HOME must be set}"
 OC_CONFIG_TXT="${OC_CONFIG_TXT:-/boot/firmware/config.txt}"
 OC_RESULTS_DIR="${OC_RESULTS_DIR:-$OC_HOME/oc-results}"
@@ -282,7 +282,7 @@ cmd_set() {
   ' "$OC_CONFIG_TXT" > "$tmp"
   {
     printf '%s\n' "$OC_BLOCK_BEGIN"
-    printf '[cm5]\n'
+    printf '[pi5]\n'
     printf 'arm_freq=%s\n' "$mhz"
     # over_voltage_delta, NOT over_voltage: the delta form is added to whatever
     # DVFS computes and preserves the curve. Plain over_voltage disables the

@@ -1,0 +1,80 @@
+[Unit]
+Description=HardwareOne OpenClaw gateway (notes-only tools)
+After=network-online.target hw1-openclaw-model.service
+Wants=network-online.target
+BindsTo=hw1-openclaw-model.service
+
+[Service]
+Type=simple
+User=@@OPENCLAW_USER@@
+Group=@@OPENCLAW_USER@@
+SupplementaryGroups=openclaw-notes openclaw-model-access
+WorkingDirectory=/var/lib/hw1-openclaw/workspace
+Environment=HOME=/var/lib/hw1-openclaw
+Environment=PATH=/opt/hw1-openclaw/node/bin:/usr/bin:/bin
+Environment=OPENCLAW_STATE_DIR=/var/lib/hw1-openclaw/state
+Environment=OPENCLAW_CONFIG_PATH=/etc/hw1-openclaw/openclaw.json
+Environment=OPENCLAW_SERVICE_REPAIR_POLICY=external
+Environment=OPENCLAW_NO_RESPAWN=1
+Environment=OPENCLAW_DISABLE_BONJOUR=1
+Environment=OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1
+Environment=NODE_COMPILE_CACHE=/var/cache/hw1-openclaw/node-compile-cache
+Environment=AGENT_NOTES_VAULT=@@VAULT_PATH@@
+Environment=AGENT_NOTES_MAX_VAULT_BYTES=536870912
+Environment=AGENT_NOTES_DESTRUCTIVE_APPROVALS=1
+Environment=AGENT_NOTES_SHARED_GROUP=1
+EnvironmentFile=/etc/hw1-openclaw/secrets.env
+EnvironmentFile=/etc/hw1-openclaw-model/model.env
+ExecStart=/opt/hw1-openclaw/node/bin/node /opt/hw1-openclaw/current/openclaw.mjs gateway --port @@GATEWAY_PORT@@
+Restart=always
+RestartSec=5s
+RestartPreventExitStatus=78
+SuccessExitStatus=0 143
+TimeoutStartSec=90s
+TimeoutStopSec=45s
+KillMode=control-group
+OOMPolicy=continue
+
+# Node/V8 needs executable anonymous mappings, so MemoryDenyWriteExecute is
+# deliberately omitted. No tool exposed to the model can execute a process.
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RemoveIPC=true
+KeyringMode=private
+DevicePolicy=closed
+IPAddressDeny=any
+IPAddressAllow=localhost
+UMask=0007
+StateDirectory=hw1-openclaw
+StateDirectoryMode=0700
+CacheDirectory=hw1-openclaw
+CacheDirectoryMode=0700
+RuntimeDirectory=hw1-openclaw
+RuntimeDirectoryMode=0700
+ReadWritePaths=/var/lib/hw1-openclaw /var/cache/hw1-openclaw /run/hw1-openclaw @@VAULT_PATH@@
+InaccessiblePaths=@@LLAMA_SERVER@@ @@LLAMA_MODEL@@
+TasksMax=128
+LimitNOFILE=8192
+LimitCORE=0
+MemoryHigh=1536M
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

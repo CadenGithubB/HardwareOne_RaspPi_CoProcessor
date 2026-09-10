@@ -13,7 +13,8 @@ import unittest
 from unittest import mock
 
 
-_TOOL_PATH = Path(__file__).resolve().parents[1] / "tools" / "g2_evenai_probe.py"
+_TOOL_PATH = (Path(__file__).resolve().parents[1] / "tools" / "link"
+              / "g2_evenai_probe.py")
 _SPEC = importlib.util.spec_from_file_location("g2_evenai_probe", _TOOL_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
 probe = importlib.util.module_from_spec(_SPEC)

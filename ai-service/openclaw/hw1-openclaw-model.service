@@ -1,0 +1,62 @@
+[Unit]
+Description=HardwareOne pinned llama.cpp model server for OpenClaw
+Before=hw1-openclaw.service
+PartOf=hw1-openclaw.service
+
+[Service]
+Type=simple
+User=openclaw-model
+Group=openclaw-model
+SupplementaryGroups=openclaw-model-access
+WorkingDirectory=/
+Environment=HOME=/var/lib/hw1-openclaw-model
+Environment=BASH_ENV=/dev/null
+Environment=ENV=/dev/null
+EnvironmentFile=/etc/hw1-openclaw-model/model.env
+ExecStart=@@LLAMA_SERVER@@ --model @@LLAMA_MODEL@@ --alias hw1-openclaw-local --host 127.0.0.1 --port @@LLAMA_PORT@@ -t 4 -c @@CONTEXT_TOKENS@@ --parallel 1 --cache-reuse 256 --jinja
+ExecStartPost=/usr/local/libexec/hw1-openclaw/wait-model-ready hw1-openclaw-model.service @@LLAMA_SERVER@@ @@LLAMA_MODEL@@ @@LLAMA_PORT@@ @@CONTEXT_TOKENS@@ 300
+Restart=on-failure
+RestartSec=5s
+SuccessExitStatus=0 143
+TimeoutStartSec=360s
+TimeoutStopSec=45s
+KillMode=control-group
+OOMPolicy=stop
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RemoveIPC=true
+KeyringMode=private
+DevicePolicy=closed
+IPAddressDeny=any
+IPAddressAllow=localhost
+UMask=0077
+StateDirectory=hw1-openclaw-model
+StateDirectoryMode=0700
+CacheDirectory=hw1-openclaw-model
+CacheDirectoryMode=0700
+RuntimeDirectory=hw1-openclaw-model
+RuntimeDirectoryMode=0700
+ReadWritePaths=/var/lib/hw1-openclaw-model /var/cache/hw1-openclaw-model /run/hw1-openclaw-model
+TasksMax=128
+LimitNOFILE=4096
+LimitCORE=0
+MemoryHigh=9G
+MemoryMax=11G

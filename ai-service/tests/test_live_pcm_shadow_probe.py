@@ -17,7 +17,8 @@ from fake_firmware import make_wav
 from hw1_ai_service.link.transport import SerialTransport
 
 
-_PROBE_PATH = Path(__file__).parents[1] / "tools" / "live_pcm_shadow_probe.py"
+_PROBE_PATH = (Path(__file__).parents[1] / "tools" / "link"
+               / "live_pcm_shadow_probe.py")
 _PROBE_SPEC = importlib.util.spec_from_file_location(
     "live_pcm_shadow_probe", _PROBE_PATH)
 assert _PROBE_SPEC is not None and _PROBE_SPEC.loader is not None

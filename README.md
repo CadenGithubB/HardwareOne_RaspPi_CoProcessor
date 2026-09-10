@@ -16,11 +16,12 @@ protocol this daemon speaks.
 | [`ai-service/`](ai-service/) | the daemon — Python package, tests, tools, and the privileged host-control units |
 | [`ai-service/hw1_ai_service/`](ai-service/hw1_ai_service/) | the package itself: link, audio, STT, LLM, pipeline, control planes |
 | [`ai-service/tests/`](ai-service/tests/) | the full suite — runs on any POSIX machine with no hardware and no models |
-| [`ai-service/tools/`](ai-service/tools/README.md) | operator probes and benchmarks, grouped into `link/`, `stt/`, `llm/` by what they investigate |
+| [`ai-service/tools/`](ai-service/tools/README.md) | operator probes and benchmarks, grouped into `link/`, `stt/`, `llm/`, and `openclaw/` by what they investigate |
 | [`ai-service/systemd/`](ai-service/systemd/) | units, the two privileged helper daemons, their sudo policy, and installers |
 | [`docs/`](docs/) | architecture, deployment paths, and the investigation runbooks |
 | [`docs/investigations/`](docs/investigations/README.md) | how to diagnose this setup on whatever hardware you have |
 | [`deploy.sh`](deploy.sh) | gated sync from a dev machine to a device |
+| [`ai-service/setup.sh`](ai-service/setup.sh) | one RPi-console first-time setup guide (core or core + OpenClaw) |
 
 ## Start here
 
@@ -28,15 +29,29 @@ protocol this daemon speaks.
 program-level design — process model, link layer, engines, pipeline.
 
 **Standing up a device:** get the tree onto a Pi 5 or CM5 (`./deploy.sh`, or a
-clone on the device), then run the provisioner *on* the device:
+clone on the device), then run the one setup guide *on* the device:
 
 ```bash
-~/hw1-ai-service/bootstrap.sh --dry-run   # print the plan
-~/hw1-ai-service/bootstrap.sh             # UART, venv, config, unit, helpers
+cd ~/hw1-ai-service
+./setup.sh --dry-run                       # print the selected plan
+./setup.sh                                  # choose core or core + OpenClaw
 ```
 
-It is re-runnable, overwrites nothing, and stops with a TODO list rather than
-inventing a credential or downloading model weights for you.
+The guide runs as the normal console/SSH administrator. Core mode installs the
+STT + local LLM + ESP32 daemon. The OpenClaw profile runs the same core phase,
+then elevates only for the root-owned OpenClaw installer; its Gateway is
+loopback-only and outbound networking is blocked unless explicitly opted out.
+Non-interactive OpenClaw setup does not add the login account to the vault;
+use `--vault-operator <user>` to opt into direct human vault access.
+For an RPi-only agent experiment, choose `OpenClaw only` or pass
+`--mode openclaw-only`; that path does not touch UART, STT, or ESP32 setup.
+The legacy `bootstrap.sh` and `openclaw/bootstrap_openclaw.sh` remain available
+for advanced, phase-specific re-runs.
+
+It is re-runnable and overwrites no credentials or tuned configuration. Core
+mode stops with TODOs for missing credentials/model work; the OpenClaw profile
+offers only its pinned, resumable downloads and requires confirmation (or
+explicit `--yes`).
 
 **Working on the code**, with no Pi and no models:
 

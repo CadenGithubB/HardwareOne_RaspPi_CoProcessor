@@ -64,15 +64,38 @@ pytest -m slow            # + the reader-stall soak
 
 ## Pi 5 / CM5 install
 
-`./bootstrap.sh` does all of this on the device and is re-runnable — it checks
-before every action, overwrites nothing, and stops with a TODO list rather than
-guessing at the two things it must not do for you (invent a UART credential,
-download model weights). Run it as the service account once the tree is there:
+`./setup.sh` is the first-time console guide and the recommended single entry
+point. It offers two profiles and is re-runnable:
+
+```text
+Core only       STT + local LLM + HardwareOne ESP32 daemon
+Core + OpenClaw the above plus the isolated, notes-only OpenClaw Gateway
+OpenClaw only   the isolated RPi agent, with no UART/STT/ESP32 setup
+```
+
+Run it as the normal SSH/console administrator once the tree is there:
 
 ```bash
-~/hw1-ai-service/bootstrap.sh --dry-run   # print the plan
-~/hw1-ai-service/bootstrap.sh             # do it
+cd ~/hw1-ai-service
+./setup.sh --dry-run                       # print the plan without changes
+./setup.sh                                  # choose a profile interactively
 ```
+
+For automation, use `./setup.sh --mode core`, `./setup.sh --mode openclaw`, or
+`./setup.sh --mode openclaw-only` for the RPi-only experiment.
+Non-interactive OpenClaw setup keeps the login account out of the vault by
+default; add `--vault-operator <user>` only when direct human vault access is
+wanted.
+The OpenClaw path invokes its root-owned installer through `sudo`; it does not
+run the gateway as the login administrator. If the login is named `openclaw`,
+the guide automatically uses a separate locked `hw1-openclaw-agent` identity
+for the gateway. The default OpenClaw systemd policy denies outbound network
+access and binds the Gateway to loopback; `--allow-openclaw-network` is an
+explicit opt-out.
+
+The underlying `bootstrap.sh` remains available for a core-only re-run, and
+`openclaw/bootstrap_openclaw.sh` remains available for an advanced OpenClaw
+reconciliation.
 
 It detects the board from `/proc/device-tree/model`. Pi 5 and CM5 need the same
 overlay and the same device node; the only thing that genuinely differs is
@@ -317,7 +340,7 @@ clock settings, changed stock hashes, paths supplied by a caller, and values
 outside its finite allowlist. Never run the user-writable `oc_step.sh` with
 sudo.
 
-The helper uses the CM5-only config filter and, only when explicitly requested,
+The helper uses the Pi-5-family config filter (matching Pi 5 and CM5) and, only when explicitly requested,
 `over_voltage_delta` (microvolts added to the DVFS-computed voltage curve)
 rather than legacy `over_voltage`, which disables firmware automatic voltage
 selection. Start each rung with no manual voltage; after clean power is proven,

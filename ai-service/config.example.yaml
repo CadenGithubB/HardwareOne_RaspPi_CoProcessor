@@ -25,12 +25,12 @@ audio:
   vad_trim: true              # drop the recorded trailing silence WITHOUT shortening
                               # the detection window (~38% of a capture is silence).
                               # false = byte-exact WAV for tools/stt/vad_replay.py.
-  vad_max_seconds: 15.0       # host wait/backstop; matching native cancel/discard exits early
+  vad_max_seconds: 30.0       # shared STT hard cap; firmware enforces the same 30s ceiling
                               # (device also has its separate 60s recording cap)
   vad_poll_s: 0.25            # how often the Pi asks the device "still recording?"
 
 # RAM sizing (service checks this at startup — service.ram_check):
-#   8GB Pi:  everything below as-is; LLM up to 3B-class Q4.
+#   8GB Pi:  bootstrap selects the measured LFM2-8B-A1B production profile.
 #   4GB Pi:  the deployed English catalog default currently resolves to
 #            medium-streaming-en, not small. Measure RSS with the exact model
 #            directory and the LLM resident before changing tiers. To evaluate
@@ -50,24 +50,19 @@ stt:
 llm:
   engine: server              # server | fake | none
   server_bin: /opt/llama.cpp/build/bin/llama-server   # empty = server already running
-  # Benched on a Pi 5 (llama-bench -p 128 -n 64 -t 4, 4GB, power-clean):
-  #   Qwen3-1.7B Q4_0    pp 91.6  tg 10.9   <- picked: fastest prefill by 29%
-  #   Qwen3-1.7B IQ4_NL  pp 70.8  tg 10.9
-  #   Qwen3-1.7B Q4_K_M  pp 56.5  tg  9.2
-  #   Qwen3-1.7B Q5_K_M  pp 47.4  tg  7.9
-  #   Qwen3-0.6B Q4_K_M  pp 162.6 tg 28.6   (the small fallback)
-  # Q4_0 wins because llama.cpp repacks it onto the ARM i8mm/dotprod GEMM
-  # kernels; that lands on prefill, which is compute-bound. Decode is
-  # bandwidth-bound (~10 GB/s here) so it tracks file size, not quant type.
-  # Bench any candidate before trusting a size estimate — IQ4_XS is smaller
-  # than Q4_0 and slower on this CPU.
-  model: /opt/models/Qwen3-1.7B-Q4_0.gguf
+  # Fresh-install default for an 8GB-class CM5. bootstrap.sh replaces this
+  # exact untouched default with the pinned Qwen3.5-2B profile on a 4GB-class
+  # board; custom paths are always preserved. The LFM2 dynamic Q3 quant was the
+  # measured production winner: 14.68 tok/s at ~3.8GiB peak server RSS, while
+  # its Q4_0 sibling swapped alongside resident STT.
+  model: /opt/models/LFM2-8B-A1B-UD-Q3_K_XL.gguf
   port: 8080
   max_tokens: 250             # output-length cap only. Does NOT change time-to-
                               # first-token (that's prefill); thinking is disabled
                               # so every token is answer text. Higher = long answers
                               # (recipes, lists) finish instead of truncating, at the
-                              # cost of more decode time (~10.9 tok/s) on those alone.
+                              # cost of more decode time (~14.7 tok/s on the 8GB
+                              # LFM2 profile) on those requests alone.
   # Keep 8 for longer conversational context. If later-turn TTFT becomes more
   # important, 6 or 4 is a reversible latency/context tradeoff to benchmark
   # after verifying llama-server's actual prompt-cache reuse.

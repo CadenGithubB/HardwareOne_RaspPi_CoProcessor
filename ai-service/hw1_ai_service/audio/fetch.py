@@ -265,7 +265,11 @@ async def _await_exchange_stop(session: Session, cfg: AudioConfig,
     event when both become ready in the same loop turn.
     """
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + cfg.vad_max_seconds
+    # One wake gets one capture budget. In particular, live-STT fallback must
+    # not start a fresh full window after already spending time consuming the
+    # same recorder. `created` is stamped when evenai_wake reaches this daemon,
+    # just after firmware confirms CAPTURING.
+    deadline = exchange.created + cfg.vad_max_seconds
     while True:
         exchange.raise_if_cancelled()
         if exchange.terminal_event.is_set():
@@ -313,7 +317,7 @@ async def _await_exchange_stop(session: Session, cfg: AudioConfig,
             # ID-scoped ownership failures and recorder failure are terminal,
             # not transient "still recording" states. Session already handles
             # authentication recovery; polling this same rejected ID until the
-            # 15-second VAD ceiling only strands the native card longer.
+            # capture ceiling only strands the native card longer.
             raise FetchError(
                 f"micrecord status failed for {exchange.exchange_id}: {rep.text}")
         if rep.ok and "discarded" in reply_text:

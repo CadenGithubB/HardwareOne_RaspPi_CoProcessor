@@ -209,6 +209,26 @@ class VoicePipeline:
         await bg.drain(2.0)
         self._stt_pool.shutdown(wait=False, cancel_futures=True)
 
+    @property
+    def batch_stt_available(self) -> bool:
+        """Whether this pipeline can serve fetched-WAV transcription."""
+        return self._stt is not None
+
+    async def transcribe_dictation(self, wav_bytes: bytes) -> str:
+        """Transcribe one closed keyboard-dictation WAV on the shared worker.
+
+        Dictation deliberately bypasses LLM/delivery and never persists the
+        wearer's field input.  It still uses the same canonical-WAV validation,
+        level diagnostics, CM5 presence accounting, and single-worker executor
+        as every other batch STT caller.
+        """
+        if self._stt is None:
+            raise RuntimeError("batch STT is unavailable")
+        parsed = wav.parse(wav_bytes)
+        wav.require_canonical(parsed)
+        self._report_audio(wav_bytes, parsed, persist=False)
+        return await self._transcribe(parsed)
+
     # -- opt-in wearer cancellation markers ------------------------------
 
     def _start_tap_window(

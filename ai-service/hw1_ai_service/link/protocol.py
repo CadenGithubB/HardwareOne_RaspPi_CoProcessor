@@ -57,6 +57,59 @@ def is_error_line(line: str) -> bool:
     return bool(_ERR_RE.match(line))
 
 
+# --- "Unknown command" is two different facts ------------------------------
+#
+# The text channel carries NO integrity check — only the P2 binary frames get a
+# CRC — so a byte damaged on the wire arrives at the firmware's parser as a
+# real command. When the damage lands in the VERB, the firmware answers
+#
+#     Unknown command: <verb-as-received> ***
+#
+# which is byte-identical in shape to what a build genuinely missing that
+# command says. Telling the two apart is the difference between a permanent
+# capability fact and a transient worth retrying, and every caller that turns
+# a feature off on this reply needs the distinction (2026-08-25: one damaged
+# `cm5 llm push` line silently disabled the whole LLM bridge for the life of
+# the daemon).
+#
+# It is decidable because the firmware echoes the verb VERBATIM and masks only
+# the arguments (redactCmdForAudit, System_Utils.cpp:1325) — the echo is a
+# faithful copy of the first token AS RECEIVED, so comparing it with what we
+# actually wrote names the culprit.
+#
+# The comparison is deliberately case-SENSITIVE: 'c' -> 'C' is one flipped bit
+# (0x20) and is exactly the damage this exists to catch. A casefolded compare
+# would file that as a missing command and disable the feature for good.
+
+UNKNOWN_MISSING = "missing"   # this build really has no such command
+UNKNOWN_CORRUPT = "corrupt"   # our line was damaged between here and the parser
+
+_UNKNOWN_CMD_RE = re.compile(r"^Unknown command:\s*(\S+)")
+
+
+def unknown_command_echo(reply_text: str) -> str | None:
+    """The verb the firmware echoed in an ``Unknown command:`` reply, if any."""
+    m = _UNKNOWN_CMD_RE.match(reply_text.lstrip())
+    return m.group(1) if m else None
+
+
+def classify_unknown_command(reply_text: str, sent_line: str) -> str | None:
+    """``UNKNOWN_MISSING`` / ``UNKNOWN_CORRUPT``, or None when ``reply_text``
+    is not an ``Unknown command:`` reply at all.
+
+    Callers MUST NOT disable a feature on ``UNKNOWN_CORRUPT``; retry instead.
+    An unparseable sent line is reported as corrupt for the same reason —
+    "I cannot prove the firmware lacks this" is the safe direction.
+    """
+    echoed = unknown_command_echo(reply_text)
+    if echoed is None:
+        return None
+    sent = sent_line.strip().split(maxsplit=1)
+    if not sent:
+        return UNKNOWN_CORRUPT
+    return UNKNOWN_MISSING if echoed == sent[0] else UNKNOWN_CORRUPT
+
+
 def is_auth_required(line: str) -> bool:
     return bool(_AUTH_REQUIRED_RE.search(line) or _SIGNED_OUT_RE.search(line))
 

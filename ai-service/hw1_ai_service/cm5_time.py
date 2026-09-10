@@ -30,6 +30,8 @@ import re
 import subprocess
 import time
 
+from .link import protocol
+from .link.health import note_corrupt
 from .link.session import (
     CommandCancelled,
     CommandTimeout,
@@ -206,7 +208,19 @@ class Cm5Time:
             raise LinkClosed(f"CM5 time push failed: {exc}") from exc
 
         if not reply.ok:
-            if reply.text.startswith("Unknown command"):
+            verdict = protocol.classify_unknown_command(reply.text, command)
+            if verdict == protocol.UNKNOWN_CORRUPT:
+                note_corrupt(self._session)
+                # The device echoed a verb we never wrote, so the line was
+                # damaged in transit rather than rejected. Disabling here would
+                # strand the device on a bad clock for the life of the link on
+                # the strength of one flipped bit; the next tick simply retries.
+                log.warning(
+                    "link damaged the cm5 time push in transit (device parsed "
+                    "the verb as %r) — retrying on the next tick",
+                    protocol.unknown_command_echo(reply.text))
+                return False
+            if verdict == protocol.UNKNOWN_MISSING:
                 if self._supported is not False:
                     self._supported = False
                     log.warning(

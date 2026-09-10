@@ -1,0 +1,119 @@
+{
+  "models": {
+    "mode": "replace",
+    "providers": {
+      "hw1local": {
+        "baseUrl": "http://127.0.0.1:@@LLAMA_PORT@@/v1",
+        "apiKey": "benchmark-run-injected",
+        "api": "openai-completions",
+        "timeoutSeconds": 600,
+        "localService": {
+          "command": "@@LLAMA_SERVER@@",
+          "args": [
+            "--model", "@@LLAMA_MODEL@@",
+            "--alias", "hw1-openclaw-benchmark",
+            "--host", "127.0.0.1",
+            "--port", "@@LLAMA_PORT@@",
+            "-t", "4",
+            "-c", "@@CONTEXT_TOKENS@@",
+            "--parallel", "1",
+            "--cache-reuse", "256",
+            "--jinja"
+          ],
+          "healthUrl": "http://127.0.0.1:@@LLAMA_PORT@@/health",
+          "readyTimeoutMs": 300000,
+          "idleStopMs": 0
+        },
+        "models": [
+          {
+            "id": "hw1-openclaw-benchmark",
+            "name": "HardwareOne CM5 benchmark model",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": @@CONTEXT_TOKENS@@,
+            "contextTokens": @@CONTEXT_TOKENS@@,
+            "maxTokens": 1024
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/var/lib/hw1-openclaw-bench/workspace",
+      "skipBootstrap": true,
+      "model": { "primary": "hw1local/hw1-openclaw-benchmark", "fallbacks": [] },
+      "models": {
+        "hw1local/hw1-openclaw-benchmark": {
+          "alias": "local-bench",
+          "params": {
+            "temperature": 0.3,
+            "chat_template_kwargs": { "enable_thinking": false }
+          }
+        }
+      },
+      "skills": ["notes"],
+      "thinkingDefault": "off",
+      "verboseDefault": "off",
+      "reasoningDefault": "off",
+      "elevatedDefault": "off",
+      "timeoutSeconds": 600,
+      "maxConcurrent": 1,
+      "heartbeat": { "every": "0m" },
+      "sandbox": { "mode": "off" }
+    },
+    "list": [
+      {
+        "id": "bench",
+        "default": true,
+        "name": "HardwareOne isolated notes benchmark",
+        "workspace": "/var/lib/hw1-openclaw-bench/workspace",
+        "skills": ["notes"]
+      }
+    ]
+  },
+  "skills": {
+    "load": { "extraDirs": ["/opt/hw1-openclaw/agent-notes/skills"], "watch": false },
+    "entries": { "notes": { "enabled": true } },
+    "limits": {
+      "maxSkillsLoadedPerSource": 8,
+      "maxSkillsInPrompt": 4,
+      "maxSkillsPromptChars": 18000,
+      "maxSkillFileBytes": 32768
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "allow": ["agent-notes"],
+    "deny": [],
+    "load": { "paths": ["/opt/hw1-openclaw/agent-notes/plugin"] },
+    "entries": {
+      "agent-notes": {
+        "enabled": true,
+        "hooks": { "allowPromptInjection": false, "allowConversationAccess": false }
+      }
+    }
+  },
+  "tools": {
+    "codeMode": false,
+    "experimental": { "planTool": false },
+    "allow": [
+      "note_write", "note_append", "note_read", "note_tag", "note_search",
+      "note_list", "note_folders", "note_move", "note_archive", "note_backlinks"
+    ],
+    "fs": { "workspaceOnly": true },
+    "exec": { "mode": "deny" },
+    "elevated": { "enabled": false },
+    "loopDetection": {
+      "enabled": true,
+      "historySize": 24,
+      "warningThreshold": 6,
+      "unknownToolThreshold": 6,
+      "criticalThreshold": 12,
+      "globalCircuitBreakerThreshold": 20,
+      "detectors": { "genericRepeat": true, "knownPollNoProgress": true, "pingPong": true },
+      "postCompactionGuard": { "windowSize": 3 }
+    }
+  }
+}

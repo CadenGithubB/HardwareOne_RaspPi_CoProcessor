@@ -10,7 +10,7 @@ umask 077
 export LC_ALL=C
 
 BENCH_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-BENCH_ROOT="$(cd -- "$BENCH_SCRIPT_DIR/.." && pwd -P)"
+BENCH_ROOT="$(cd -- "$BENCH_SCRIPT_DIR/../.." && pwd -P)"
 BENCH_ACCOUNT_HOME="${HOME:?HOME must name the CM5 service account home}"
 BENCH_CONFIG="$BENCH_ACCOUNT_HOME/.config/hw1-ai-service/config.yaml"
 BENCH_PYTHON="$BENCH_ACCOUNT_HOME/hw1ai/bin/python"
@@ -558,6 +558,12 @@ verify_run_health() {
 run_one_model() {
   local label="$1" model="$2" sha bytes log rc session
   [[ -r "$model" && -f "$model" ]] || die "model is not a readable regular file: $model"
+  # Equalize cold page-cache state for the first and repeated baselines. On a
+  # 4 GB host the intervening 3B model evicts most (but not always all) of the
+  # active model, which otherwise produces asymmetric major faults and false
+  # baseline-drift failures. Best effort keeps the helper optional.
+  sync
+  sudo -n sh -c 'echo 3 > /proc/sys/vm/drop_caches' >/dev/null 2>&1 || true
   check_model_memory "$model"
   sha="$(file_sha256 "$model")"
   bytes="$(stat -c '%s' -- "$model")"

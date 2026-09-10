@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import suppress
 
 import pytest
@@ -193,6 +194,21 @@ def test_owned_status_rejection_fails_immediately_instead_of_polling_cap():
             await fetch._await_exchange_stop(session, cfg, exchange)
 
         assert session.commands == [f"micrecord statusid {TEST_EVENAI_ID}"]
+
+    run(main())
+
+
+def test_owned_wait_reuses_original_wake_capture_deadline():
+    """A live-STT miss must not grant batch fallback a second full window."""
+
+    async def main():
+        session = _RejectedOwnedSession()
+        exchange = EvenAiExchange(
+            TEST_EVENAI_ID, created=time.monotonic() - 2.0)
+        cfg = AudioConfig(vad_poll_s=0.001, vad_max_seconds=1.0)
+
+        assert await fetch._await_exchange_stop(session, cfg, exchange) is None
+        assert session.commands == []
 
     run(main())
 

@@ -15,7 +15,8 @@ from unittest import mock
 import wave
 
 
-_TOOL_PATH = Path(__file__).resolve().parents[1] / "tools" / "moonshine_stream_replay.py"
+_TOOL_PATH = (Path(__file__).resolve().parents[1] / "tools" / "stt"
+              / "moonshine_stream_replay.py")
 _SPEC = importlib.util.spec_from_file_location("moonshine_stream_replay", _TOOL_PATH)
 assert _SPEC is not None and _SPEC.loader is not None
 replay = importlib.util.module_from_spec(_SPEC)

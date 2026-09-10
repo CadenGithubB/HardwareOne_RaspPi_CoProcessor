@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Root/operator wrapper for the externally supervised OpenClaw CLI.
+set -Eeuo pipefail
+umask 0007
+
+[[ ${EUID:-$(id -u)} -eq 0 ]] || {
+  printf 'Run through sudo: sudo hw1-openclaw <command>\n' >&2
+  exit 77
+}
+[[ -r /etc/hw1-openclaw/secrets.env ]] || {
+  printf 'Missing /etc/hw1-openclaw/secrets.env\n' >&2
+  exit 78
+}
+[[ -r /etc/hw1-openclaw-model/model.env ]] || {
+  printf 'Missing /etc/hw1-openclaw-model/model.env\n' >&2
+  exit 78
+}
+
+exec runuser -u @@OPENCLAW_USER@@ -- env -i \
+  HOME=/var/lib/hw1-openclaw USER=@@OPENCLAW_USER@@ LOGNAME=@@OPENCLAW_USER@@ LC_ALL=C \
+  PATH=/opt/hw1-openclaw/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  OPENCLAW_STATE_DIR=/var/lib/hw1-openclaw/state \
+  OPENCLAW_CONFIG_PATH=/etc/hw1-openclaw/openclaw.json \
+  OPENCLAW_SERVICE_REPAIR_POLICY=external \
+  OPENCLAW_NO_RESPAWN=1 \
+  OPENCLAW_DISABLE_BONJOUR=1 \
+  OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION=1 \
+  NODE_COMPILE_CACHE=/var/cache/hw1-openclaw/node-compile-cache \
+  AGENT_NOTES_VAULT=@@VAULT_PATH@@ \
+  AGENT_NOTES_MAX_VAULT_BYTES=536870912 \
+  AGENT_NOTES_DESTRUCTIVE_APPROVALS=1 \
+  AGENT_NOTES_SHARED_GROUP=1 \
+  bash -c 'cd -- /var/lib/hw1-openclaw/workspace; set -a; source /etc/hw1-openclaw/secrets.env; source /etc/hw1-openclaw-model/model.env; set +a; exec /opt/hw1-openclaw/node/bin/node /opt/hw1-openclaw/current/openclaw.mjs "$@"' \
+  bash "$@"

@@ -385,10 +385,11 @@ find "$CANCEL_PULL_DIR" -maxdepth 2 -type f -print
 
 ## Install or refresh the CM5 environment
 
-`ai-service/bootstrap.sh` performs this sequence, plus the UART overlay, group
-membership, lingering, model-directory and privileged-helper steps that the
-block below leaves to the operator. Prefer it for a new device; the block
-remains the reference for what a refresh does and for hand-running one step.
+`ai-service/setup.sh` is the single first-time console entry point. It offers a
+core-only profile or the core plus OpenClaw, then delegates to the hardened
+phase-specific installers. `ai-service/bootstrap.sh` remains the core-only
+re-run path; the block below remains the reference for what a refresh does and
+for hand-running one step.
 
 Run on the CM5 after syncing. This refresh deliberately requires the existing
 live config and UART credentials; it never creates or overwrites either one.

@@ -4,9 +4,12 @@ Probes and benchmarks you run by hand against a real device. Grouped by what
 they investigate, matching the runbooks in
 [`docs/investigations/`](../../docs/investigations/README.md).
 
-These are not part of the installed package and nothing imports them — they are
-scripts, run from the deployed tree on the device (`~/hw1-ai-service/tools/...`)
-with the service venv's interpreter.
+These are not part of the Python package and nothing imports them — they are
+scripts run by hand on the device. Most run from the deployed tree
+(`~/hw1-ai-service/tools/...`) with the service venv's interpreter. The
+OpenClaw installer copies its security-sensitive harness into a root-owned
+location and provides a dedicated wrapper instead; its section says how to run
+it.
 
 ## `link/` — the UART link and the audio transport over it
 
@@ -47,3 +50,18 @@ Runbook: [llm-serving](../../docs/investigations/llm-serving.md).
 `oc_step.sh` needs the `hw1-oc-helper` privilege boundary installed
 (`bootstrap.sh --with-oc-helper`); everything else here runs as the service
 account.
+
+## `openclaw/` — agentic tool use and persistent Obsidian memory
+
+| Tool | Use |
+| --- | --- |
+| `benchmark_openclaw.sh` | installed root/operator wrapper for an isolated, repeatable OpenClaw memory benchmark |
+| `openclaw_memory_probe.py` | drives three fresh embedded agent sessions and grades transcripts plus disposable-vault state |
+| `openclaw_memory_cases.json` | fixed write/read, cross-session search/recall, and archive cases |
+
+Install the separate notes-only service with
+[`openclaw/bootstrap_openclaw.sh`](../openclaw/README.md), then invoke the
+root-owned harness as `sudo hw1-openclaw-benchmark`. Do not run the Python probe
+directly or point it at a real vault.
+
+Runbook: [openclaw-agent](../../docs/investigations/openclaw-agent.md).

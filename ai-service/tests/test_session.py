@@ -11,6 +11,7 @@ from hw1_ai_service.link.session import (
     LoginFailed,
     Session,
     _firmware_cli_token,
+    _redact,
 )
 from hw1_ai_service.link.transport import LinkEvent
 
@@ -25,6 +26,41 @@ def test_login_and_status(firmware):
             assert "UART link: running" in rep.text
         finally:
             transport.close()
+    run(main())
+
+
+def test_dictation_command_logging_never_contains_field_text():
+    request_id = "a1b2c3d400000001"
+    assert _redact(
+        f"dictate result {request_id} private field contents"
+    ) == f"dictate result {request_id} <redacted>"
+    assert _redact(
+        f"dictate fail {request_id} recognizer detail"
+    ) == f"dictate fail {request_id} <redacted>"
+
+
+def test_login_generation_and_listener_cover_every_successful_login(firmware):
+    async def main():
+        transport, session = open_link(firmware)
+        seen = []
+        session.add_login_listener(seen.append)
+        try:
+            await session.login()
+            assert session.login_generation == 1
+            assert seen == [1]
+
+            # Force the ordinary timeout/auth recovery path to establish a new
+            # authenticated firmware epoch. Capability users must see it even
+            # when there was no serial disconnect.
+            firmware.authed_user = None
+            rep = await session.command(
+                "uartlink status", expect="auto", timeout=10)
+            assert rep.ok
+            assert session.login_generation == 2
+            assert seen == [1, 2]
+        finally:
+            transport.close()
+
     run(main())
 
 

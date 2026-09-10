@@ -1,0 +1,9 @@
+{
+  "id": "agent-notes",
+  "name": "Agent Notes",
+  "description": "Persistent markdown notes / long-term memory in a host Obsidian vault.",
+  "version": "1.4.0",
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} },
+  "activation": { "onStartup": true },
+  "contracts": { "tools": ["note_write", "note_append", "note_read", "note_tag", "note_search", "note_list", "note_folders", "note_move", "note_archive", "note_backlinks"] }
+}

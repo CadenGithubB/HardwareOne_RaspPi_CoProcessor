@@ -12,6 +12,8 @@ import logging
 import re
 from enum import StrEnum
 
+from .link import protocol
+from .link.health import note_corrupt
 from .link.session import (
     CommandCancelled,
     CommandTimeout,
@@ -23,6 +25,15 @@ from .link.session import (
 log = logging.getLogger("cm5.presence")
 
 PROTOCOL_VERSION = 1
+
+# Consecutive heartbeats the device answered with a verb we never wrote. The
+# text channel has no CRC, so one damaged line is a fact of life and is simply
+# re-sent — losing a heartbeat matters (the firmware's lease is 15s against a
+# 5s cadence), and a resend costs one command round trip, so it cannot spin.
+# A run of them is a link that is no longer carrying text reliably, and the
+# supervisor's reconnect — which re-opens the port and re-logs-in — is the
+# broader repair. Escalating is deliberately cheaper than staying wedged.
+MAX_CORRUPT_HEARTBEATS = 3
 HEARTBEAT_INTERVAL_S = 5.0
 HEARTBEAT_TIMEOUT_S = 10.0
 LEGACY_REPROBE_INTERVAL_S = 60.0
@@ -66,6 +77,7 @@ class Cm5Presence:
         self._ack_changed = asyncio.Event()
         self._failure: BaseException | None = None
         self._supported: bool | None = None
+        self._corrupt_streak = 0
         self._running = False
         # BUSY is a REFCOUNT with named holders, not a flag. STT and a
         # CM5-routed generation overlap freely (a wearer wake while the web UI
@@ -233,7 +245,28 @@ class Cm5Presence:
                     raise LinkClosed(f"CM5 heartbeat failed: {exc}") from exc
 
                 if not reply.ok:
-                    if reply.text.startswith("Unknown command"):
+                    verdict = protocol.classify_unknown_command(
+                        reply.text, command)
+                    if verdict == protocol.UNKNOWN_CORRUPT:
+                        note_corrupt(self._session)
+                        # The device echoed a verb we never wrote: this line
+                        # was damaged in transit, not rejected. It says nothing
+                        # about whether the build speaks cm5-presence-v1, so
+                        # re-send rather than dropping to legacy behaviour.
+                        self._corrupt_streak += 1
+                        log.warning(
+                            "link damaged heartbeat %d in transit (device "
+                            "parsed the verb as %r) — resending (%d/%d)",
+                            sequence,
+                            protocol.unknown_command_echo(reply.text),
+                            self._corrupt_streak, MAX_CORRUPT_HEARTBEATS)
+                        if self._corrupt_streak >= MAX_CORRUPT_HEARTBEATS:
+                            raise LinkClosed(
+                                "CM5 heartbeat damaged in transit "
+                                f"{self._corrupt_streak} times in a row — "
+                                "reconnecting to resynchronize the link")
+                        continue
+                    if verdict == protocol.UNKNOWN_MISSING:
                         first_legacy_observation = self._supported is not False
                         self._supported = False
                         self._acknowledged_generation = self._desired_generation
@@ -261,6 +294,7 @@ class Cm5Presence:
 
                 self._validate_reply(reply.text, sequence, mode)
                 self._supported = True
+                self._corrupt_streak = 0
                 last_sent_generation = generation
                 if generation > self._acknowledged_generation:
                     self._acknowledged_generation = generation

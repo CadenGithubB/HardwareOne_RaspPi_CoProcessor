@@ -113,6 +113,12 @@ class FakeFirmware:
         self.wav_bytes = wav_bytes if wav_bytes is not None else make_wav()
         self.oled_running = oled_running
         self.mic_disabled = False       # True -> openmic replies uppercase ERROR
+        # Wire-damage injection. The link's TEXT channel carries no CRC (only
+        # the P2 binary frames do), so a flipped bit arrives at this parser as
+        # a real command. See damage_next_verb().
+        self._damage_verb_remaining = 0
+        self._damage_verb_text = "he5"
+        self._damage_verb_match: str | None = None
         self.support_voicefetch = True  # False -> simulate pre-P2 firmware
         # Optional per-frame stall lets cancellation/EVT tests interleave with
         # a stream instead of racing a whole in-memory burst.
@@ -147,6 +153,11 @@ class FakeFirmware:
         self.g2_texts: list[str] = []
         self.deleted: list[str] = []
         self.command_log: list[str] = []
+        self.dictation_host_ready = False
+        self.dictation_id: str | None = None
+        self.dictation_path: str | None = None
+        self.dictation_text: str | None = None
+        self.dictation_failure: str | None = None
         # EvenAI ("Hey Even") native-session double: g2evenai targets.
         self.evenai_active = False
         self.evenai_exchange_id: str | None = None
@@ -186,6 +197,11 @@ class FakeFirmware:
             tuple[str, str, str, int, int, int, int, str]
         ] = []
         self.support_cm5_presence = True
+        # False -> simulate a build with no `cm5 linkhealth` registry row.
+        self.support_cm5_linkhealth = True
+        # Latest accepted host link-health report, plus how many landed.
+        self.cm5_linkhealth: dict[str, int] = {}
+        self.cm5_linkhealth_reports = 0
         self.cm5_session_generation = 0
         self.cm5_session_epoch = 0
         self.cm5_presence_epoch = 0
@@ -386,6 +402,18 @@ class FakeFirmware:
         self._evt_seq += 1
         self._write_raw(self._frame_wire(P.FRAME_EVT, self._evt_seq,
                                          text.encode("utf-8")))
+
+    def begin_dictation_capture(self, request_id: str) -> str:
+        """Publish one already-closed keyboard dictation like current firmware."""
+        path = f"/sd/recordings/rec_{request_id}.wav"
+        with self._lock:
+            self.files[path] = self.wav_bytes
+            self.dictation_id = request_id
+            self.dictation_path = path
+            self.dictation_text = None
+            self.dictation_failure = None
+        self.push_event(f"dictate_request {request_id} {path}")
+        return path
 
     def begin_wake_capture(self, *, push: bool = True,
                            exchange_id: str = TEST_EVENAI_ID,
@@ -773,7 +801,34 @@ class FakeFirmware:
             with self._lock:
                 self._cm5_command_finished_locked(reply_admitted)
 
+    def damage_next_verb(self, count: int = 1, replacement: str = "he5",
+                         *, match: str | None = None) -> None:
+        """Deliver the next `count` inbound lines with a mangled VERB.
+
+        Models the real 2026-08-25 fault: `cm5 llm push ...` reached the device
+        as `he5 llm push ...` ('c'->'h' and 'm'->'e' are one flipped bit each
+        at 2 Mbaud with no flow control), and the firmware answered with an
+        ordinary unknown-command reply that echoed the damaged verb. The
+        arguments are left alone: damage anywhere else is a different problem
+        (a wrong chunk of answer text), while damage in the VERB is the one
+        that gets misread as "this build lacks the feature".
+
+        `match` narrows the damage to lines containing that substring, so a
+        test can hit exactly the line it means (several bridge lines can be in
+        flight around one turn) instead of whichever arrived first.
+        """
+        self._damage_verb_remaining = count
+        self._damage_verb_text = replacement
+        self._damage_verb_match = match
+
     def _dispatch(self, line: str) -> str | None:
+        if (self._damage_verb_remaining > 0 and
+                (self._damage_verb_match is None or
+                 self._damage_verb_match in line)):
+            self._damage_verb_remaining -= 1
+            _verb, _sep, rest = line.partition(" ")
+            line = f"{self._damage_verb_text} {rest}" if rest \
+                else self._damage_verb_text
         if re.match(r"login(?:\s|$)", line, re.IGNORECASE):
             # Exact firmware CommandArgs subset: ASCII whitespace separates
             # unquoted tokens; a token beginning with `"` consumes through
@@ -871,6 +926,40 @@ class FakeFirmware:
                     f"cmd_grace={int(snapshot['command_grace'])} "
                     f"monitor={int(fresh)} stale_n=0 "
                     f"stack_free_min={1024 if seen else 0}")
+        if self.support_cm5_linkhealth and re.match(
+                r"cm5\s+linkhealth(?:\s|$)", line, re.IGNORECASE):
+            rest = line.split(None, 2)
+            if len(rest) < 3:
+                # The bare human read form; the daemon never sends it.
+                return (f"OK: CM5 link health: reports="
+                        f"{self.cm5_linkhealth_reports}")
+            version, fields = rest[2].split(None, 1) if " " in rest[2] \
+                else (rest[2], "")
+            if version != "1" or not fields:
+                return "Error: Usage: cm5 linkhealth 1 <key>=<u32> ..."
+            if self.authed_user is None or self.cm5_session_epoch == 0:
+                return ("Error: cm5 linkhealth requires an authenticated "
+                        "uart session")
+            parsed: dict[str, int] = {}
+            unknown = 0
+            known = ("garbage", "corrupt", "timeouts", "strays", "logins",
+                     "resets", "tx", "rx", "up")
+            for token in fields.split():
+                if token.count("=") != 1:
+                    return "Error: Usage: cm5 linkhealth 1 <key>=<u32> ..."
+                key, value = token.split("=", 1)
+                if not key or not value.isdecimal() or str(int(value)) != value:
+                    return "Error: Usage: cm5 linkhealth 1 <key>=<u32> ..."
+                if key.lower() in known:
+                    parsed[key.lower()] = int(value)
+                else:
+                    unknown += 1
+            if not parsed:
+                return "Error: Usage: cm5 linkhealth 1 <key>=<u32> ..."
+            self.cm5_linkhealth = parsed
+            self.cm5_linkhealth_reports += 1
+            return (f"OK: cm5 linkhealth version=1 keys={len(parsed)} "
+                    f"unknown={unknown}")
         heartbeat_line = self.support_cm5_presence and cm5_heartbeat_namespace
         if heartbeat_line:
             m = re.fullmatch(
@@ -1140,6 +1229,34 @@ class FakeFirmware:
                 return "OK: Microphone started successfully"
             self.mic_open = True
             return f"OK: Microphone enabled ({self.mic_source} 16000Hz)"
+        if line == "dictate hostready v1":
+            self.dictation_host_ready = True
+            return "OK: dictation host ready v1"
+        if line == "dictate hostready off":
+            self.dictation_host_ready = False
+            return "OK: dictation host readiness revoked"
+        m = re.fullmatch(r"dictate result ([0-9a-f]{16}) (.+)", line)
+        if m:
+            request_id, text = m.group(1), m.group(2)
+            if request_id != self.dictation_id:
+                return "Error: no dictation is waiting for that id"
+            self.dictation_text = text
+            if self.dictation_path is not None:
+                self.files.pop(self.dictation_path, None)
+            self.dictation_id = None
+            self.dictation_path = None
+            return f"OK: dictation delivered ({len(text)} chars)"
+        m = re.fullmatch(r"dictate fail ([0-9a-f]{16})(?: (.*))?", line)
+        if m:
+            request_id, reason = m.group(1), m.group(2) or "host failure"
+            if request_id != self.dictation_id:
+                return "Error: no dictation is waiting for that id"
+            self.dictation_failure = reason
+            if self.dictation_path is not None:
+                self.files.pop(self.dictation_path, None)
+            self.dictation_id = None
+            self.dictation_path = None
+            return "OK: dictation marked failed"
         if line == "micread json":
             return json.dumps({
                 "schema": 1,

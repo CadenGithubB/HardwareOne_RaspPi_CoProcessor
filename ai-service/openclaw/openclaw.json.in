@@ -1,0 +1,184 @@
+{
+  "gateway": {
+    "mode": "local",
+    "bind": "loopback",
+    "port": @@GATEWAY_PORT@@,
+    "auth": {
+      "mode": "token",
+      "token": "${OPENCLAW_GATEWAY_TOKEN}",
+      "allowTailscale": false,
+      "rateLimit": {
+        "maxAttempts": 10,
+        "windowMs": 60000,
+        "lockoutMs": 300000,
+        "exemptLoopback": false
+      }
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "controlUi": {
+      "enabled": true,
+      "basePath": "/openclaw",
+      "allowInsecureAuth": false,
+      "dangerouslyDisableDeviceAuth": false
+    },
+    "terminal": {
+      "enabled": false
+    }
+  },
+  "discovery": {
+    "mdns": {
+      "mode": "off"
+    }
+  },
+  "models": {
+    "mode": "replace",
+    "providers": {
+      "hw1local": {
+        "baseUrl": "http://127.0.0.1:@@LLAMA_PORT@@/v1",
+        "apiKey": "${HW1_MODEL_API_KEY}",
+        "api": "openai-completions",
+        "timeoutSeconds": 600,
+        "models": [
+          {
+            "id": "hw1-openclaw-local",
+            "name": "HardwareOne CM5 local model",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": @@CONTEXT_TOKENS@@,
+            "contextTokens": @@CONTEXT_TOKENS@@,
+            "maxTokens": 1024
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/var/lib/hw1-openclaw/workspace",
+      "skipBootstrap": true,
+      "model": {
+        "primary": "hw1local/hw1-openclaw-local",
+        "fallbacks": []
+      },
+      "models": {
+        "hw1local/hw1-openclaw-local": {
+          "alias": "local",
+          "params": {
+            "temperature": 0.3,
+            "chat_template_kwargs": {
+              "enable_thinking": false
+            }
+          }
+        }
+      },
+      "skills": ["notes"],
+      "thinkingDefault": "off",
+      "verboseDefault": "off",
+      "reasoningDefault": "off",
+      "elevatedDefault": "off",
+      "timeoutSeconds": 600,
+      "maxConcurrent": 1,
+      "heartbeat": {
+        "every": "0m"
+      },
+      "sandbox": {
+        "mode": "off"
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "name": "HardwareOne",
+        "workspace": "/var/lib/hw1-openclaw/workspace",
+        "skills": ["notes"]
+      }
+    ]
+  },
+  "skills": {
+    "load": {
+      "extraDirs": ["/opt/hw1-openclaw/agent-notes/skills"],
+      "watch": false
+    },
+    "entries": {
+      "notes": {
+        "enabled": true
+      }
+    },
+    "limits": {
+      "maxSkillsLoadedPerSource": 8,
+      "maxSkillsInPrompt": 4,
+      "maxSkillsPromptChars": 18000,
+      "maxSkillFileBytes": 32768
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "allow": ["agent-notes"],
+    "deny": [],
+    "load": {
+      "paths": ["/opt/hw1-openclaw/agent-notes/plugin"]
+    },
+    "entries": {
+      "agent-notes": {
+        "enabled": true,
+        "hooks": {
+          "allowPromptInjection": false,
+          "allowConversationAccess": false
+        }
+      }
+    }
+  },
+  "tools": {
+    "codeMode": false,
+    "experimental": {
+      "planTool": false
+    },
+    "allow": [
+      "note_write",
+      "note_append",
+      "note_read",
+      "note_tag",
+      "note_search",
+      "note_list",
+      "note_folders",
+      "note_move",
+      "note_archive",
+      "note_backlinks"
+    ],
+    "fs": {
+      "workspaceOnly": true
+    },
+    "exec": {
+      "mode": "deny"
+    },
+    "elevated": {
+      "enabled": false
+    },
+    "loopDetection": {
+      "enabled": true,
+      "historySize": 24,
+      "warningThreshold": 6,
+      "unknownToolThreshold": 6,
+      "criticalThreshold": 12,
+      "globalCircuitBreakerThreshold": 20,
+      "detectors": {
+        "genericRepeat": true,
+        "knownPollNoProgress": true,
+        "pingPong": true
+      },
+      "postCompactionGuard": {
+        "windowSize": 3
+      }
+    }
+  }
+}

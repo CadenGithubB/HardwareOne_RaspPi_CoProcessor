@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Root-owned, finite tryboot helper for CM5 overclock campaigns.
+"""Root-owned, finite tryboot helper for Pi 5-family overclock campaigns.
 
 Install this file root:root mode 0755 at
 ``/usr/local/libexec/hw1-oc-helper``. The unprivileged campaign runner may only
@@ -189,7 +189,9 @@ def _managed_config(base: str, mhz: int, delta_uv: int) -> bytes:
     lines = [
         base.rstrip("\n"),
         BLOCK_BEGIN,
-        "[cm5]",
+        # [pi5] applies to Pi 5, Pi 500, and CM5.  Using [cm5] here silently
+        # leaves a Pi 5 Model B at stock clocks during an otherwise valid trial.
+        "[pi5]",
         f"arm_freq={mhz}",
     ]
     if delta_uv:
